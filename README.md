@@ -2,6 +2,21 @@
 
 A React Native (iOS) app for selecting badminton sessions, logging court/shuttlecock costs, and splitting by hours played — pay less if you play fewer hours.
 
+---
+
+## For Developers
+
+**AI agents**: Read [AGENTS.md](./AGENTS.md) before writing any code. It covers:
+- Required tooling (Expo SDK 57, GitNexus)
+- Code standards and commit rules
+- State management patterns
+- File structure
+
+Quick links:
+- [current_status.md](./current_status.md) — repo stats
+- [ADR.md](./ADR.md) — architecture decision template
+- [ARCHITECTURE-DECISION-RECORD.md](./ARCHITECTURE-DECISION-RECORD.md) — full ADR history
+
 ## How to Use
 
 1. **Members**: Enter name and save. Reused across all sessions.
