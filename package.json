@@ -1,5 +1,5 @@
 {
-  "name": "chia-tien-cau-long",
+  "name": "badminton-expense",
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
@@ -27,6 +27,7 @@
     "ios": "expo run:ios",
     "ios:device": "expo run:ios --device --configuration Release",
     "ios:install": "zsh scripts/ios-install-release.sh",
+    "zalo": "npm start --prefix tools/zalo-bridge",
     "postinstall": "patch-package",
     "typecheck": "tsc --noEmit"
   },

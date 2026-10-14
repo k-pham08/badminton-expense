@@ -59,14 +59,14 @@ export function BackupCard() {
         await Sharing.shareAsync(path, {
           mimeType: 'application/json',
           UTI: 'public.json',
-          dialogTitle: 'Xuất dữ liệu Cầu Lông',
+          dialogTitle: 'Export Badminton Data',
         });
         return;
       }
       await Clipboard.setStringAsync(json);
       await Share.share({
         message: json,
-        title: 'Cầu Lông JSON',
+        title: 'Badminton JSON',
       });
     } catch (error) {
       Alert.alert('Xuất thất bại', error instanceof Error ? error.message : 'Không xuất được dữ liệu.');

@@ -10,7 +10,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { DayBrief } from '../components/DayBrief';
-import { DayVoteModal } from '../components/VoteImportModal';
 import { Card, MoneyInput, PaidChip, PrimaryButton, SecondaryButton, SectionTitle, Stepper, TextField } from '../components/ui';
 import { lastSavedSession, useStore } from '../store';
 import { colors, radius, space } from '../theme';
@@ -98,7 +97,6 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
   const [newMemberName, setNewMemberName] = useState('');
   const [courtPickerOpen, setCourtPickerOpen] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
-  const [voteOpen, setVoteOpen] = useState(false);
 
   const shuttlePrice = month.shuttlePrice;
   const shuttleName = (month.shuttleName ?? '').trim();
@@ -315,13 +313,6 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
     setAttendeeCount(ids.length);
   };
 
-  const applyVoteIds = (ids: string[]) => {
-    setAttendeeIds(ids);
-    setAttendeeCount(ids.length);
-    setAttendeeHours((hours) => attendeeHoursOf({ attendeeIds: ids, attendeeHours: hours }));
-    setPaidIds((paid) => paid.filter((id) => ids.includes(id)));
-  };
-
   const addMemberToDay = () => {
     const id = store.addMember(newMemberName);
     if (!id) return;
@@ -495,13 +486,10 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
         <Card>
           <SectionTitle>Người đánh ({people})</SectionTitle>
           <Text style={styles.hint}>
-            Chọn ai đánh hôm nay. Phiếu cả tháng dán ở tab Tháng. Ở phần chia tiền, ai đến trễ / về sớm thì bớt giờ.
+            Chọn ai đánh hôm nay. Ở phần chia tiền, ai đến trễ / về sớm thì bớt giờ.
           </Text>
           {members.length > 0 ? (
             <View style={styles.memberHeader}>
-              <Pressable onPress={() => setVoteOpen(true)}>
-                <Text style={styles.link}>Dán vote ngày này</Text>
-              </Pressable>
               <Pressable onPress={selectAll}>
                 <Text style={styles.link}>Chọn tất cả</Text>
               </Pressable>
@@ -678,14 +666,6 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
         fullHours={split.fullHours}
         share={share}
         onClose={() => setBriefOpen(false)}
-      />
-
-      <DayVoteModal
-        visible={voteOpen}
-        date={date}
-        members={members}
-        onClose={() => setVoteOpen(false)}
-        onApply={applyVoteIds}
       />
 
       <Modal visible={courtPickerOpen} animationType="slide" presentationStyle="pageSheet">

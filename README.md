@@ -1,80 +1,126 @@
-# Cầu Lông — chia tiền team
+# Badminton — Team Expense Splitter
 
-App React Native (iOS) để chọn ngày đánh trong tháng, nhập tiền sân / cầu, rồi chia theo số người — ai đánh ít giờ hơn thì trả ít hơn.
+A React Native (iOS) app for selecting badminton sessions, logging court/shuttlecock costs, and splitting by hours played — pay less if you play fewer hours.
 
-## Dùng thế nào
+## How to Use
 
-1. **Thành viên**: nhập tên rồi lưu. Dùng lại cho mọi buổi.
-2. **Sân**: lưu chi nhánh, tên sân, và **giờ cố định** (bắt đầu/kết thúc, bước 5 phút). Buổi đánh chỉ chọn sân, không nhập giờ lại.
-3. **Tháng mới**: nhập **tên cầu** và **giá 1 trái**. Chọn **thứ đánh** (T3, T6…) một lần — áp dụng cả tháng.
-4. Muốn đổi sân/người một hôm thì vào đúng ngày đó. Có thể **Áp dụng cho mọi thứ …** để copy sang các ngày cùng thứ.
-5. Sau khi đánh, mở buổi đó:
-   - Sân: chọn chi nhánh + sân + khung giờ đã lưu. Số giờ tự tính.
-   - Số trái cầu tháng (theo tên/giá đã đặt)
-   - Loại cầu phát sinh: tên cầu, giá/trái, số trái
-   - Chọn thành viên đã lưu, hoặc thêm người mới vào buổi (sẽ được lưu lại)
-   - Ai đến trễ / về sớm: bớt **giờ đánh** của người đó. Tiền sân + cầu chia theo giờ.
-6. Mặc định chia đều (mọi người đủ giờ). Có người ít giờ hơn thì tiền từng người khác nhau. Số mỗi người **làm tròn 1.000đ**. Đánh dấu **Đã chuyển / Chưa chuyển**.
-7. Tab **Tổng kết**: cộng nợ từng người, còn bao nhiêu, đánh dấu đã chuyển cả tháng.
+1. **Members**: Enter name and save. Reused across all sessions.
+2. **Courts**: Save branch, court name, and **fixed hours** (start/end, 5-min steps). Session just picks a saved court — no need to re-enter hours.
+3. **New Month**: Enter **shuttlecock name** and **price per piece**. Pick **play days** (Tue, Fri…) once — applies all month.
+4. To change court/players for a specific day, go to that date. Use **Apply to all same days...** to copy to all dates with the same weekday.
+5. After playing, open that session:
+   - Court: select saved branch + court + time slot. Hours auto-calculated.
+   - Monthly shuttlecock count (based on set name/price)
+   - Extra shuttlecocks: name, price/piece, count
+   - Select saved members, or add new people to the session (will be saved)
+   - Someone arrived late/left early: reduce **play hours** for that person. Court + shuttlecock cost divided by hours.
+6. Default splits evenly (everyone plays full hours). If someone plays fewer hours, each person's amount differs. Amounts **rounded to nearest 1000 VND**. Mark **Paid / Unpaid**.
+7. **Summary** tab: sums each person's debt, shows remaining balance, marks whole month as paid.
 
-Dữ liệu lưu trên máy, không cần tài khoản.
+Data stored on device, no account required.
 
-**Chuyển máy:** tab Tháng → **Sao lưu**.
+## Pull Members and Votes from Zalo
 
-- Dữ liệu nhỏ: **Xuất JSON** (copy / AirDrop chữ). Máy kia **Nhập JSON** → Dán JSON.
-- Dữ liệu lớn (>50KB): xuất/nhập bằng file `.json`.
+App doesn't call Zalo directly. Mac logs into Zalo and opens a local network port. **Zalo** tab fetches pinned votes. Calendar and expenses update only when you select a vote and apply it.
 
-Nhập sẽ thay toàn bộ dữ liệu trên máy nhận.
+### First Time
 
-## Chạy trên iOS
-
-Cần Node 20+ (khuyên dùng 24).
-
-### Máy thật, không cần ký Apple (Expo Go)
-
-SDK 57 trên iPhone: phải đăng nhập **cùng một tài khoản Expo** (miễn phí) ở máy Mac và trong Expo Go. Đây không phải tài khoản Apple Developer.
-
-1. Tạo tài khoản miễn phí: https://expo.dev/signup
-2. Cài [Expo Go](https://apps.apple.com/app/expo-go/id982107779) từ App Store.
-3. Trên Mac:
+1. On Mac, in the app directory:
 
 ```bash
-cd chia-tien-cau-long
+npm run zalo
+```
+
+2. Scan the QR shown (same file at `~/.culong/zalo-qr.png`) with Zalo on your phone, then tap Confirm.
+3. Token is in `~/.culong/zalo-bridge.json`. Terminal also prints "Token for app".
+4. Terminal prints an address like `http://192.168.1.11:3927`. Mac and iPhone must be on the same Wi-Fi.
+5. In app, **Zalo** tab → **Connect Zalo**.
+6. Paste host and token → **Save and Get Groups** → select badminton group. If only one group, app selects automatically.
+
+Login cookie stays on Mac (`~/.culong/zalo.json`), not on phone and not in backup files.
+
+### Each Time
+
+**Month**, **Members**, **Courts**, **Summary** tabs don't auto-pull from Zalo. Go to **Zalo** tab → **Load Pinned Votes**. Status line:
+
+- `Zalo · group name · 18:42` — votes just loaded
+- `Loading votes`
+- `Can't reach Mac` — bridge off, or different Wi-Fi
+- `Need QR scan on Mac` — Zalo session expired, run `npm run zalo` and scan again
+- `Invalid token` — re-paste token
+
+Each vote has an **Apply to Month** button below its name. Tap it to see diff against the current month open in Month tab. **Apply vote to month** writes changes. **Don't apply** keeps calendar unchanged.
+
+- Only members already linked to Zalo get updated from that day's vote. Manually added people on that day are kept.
+- Dates not on calendar won't be added. Dates before today are skipped. Dates in other months aren't written. Switch months in Month tab, then apply again.
+- Session already has expenses: diff table shows, but doesn't change people or amounts.
+- Names in vote not yet linked: shown in table, don't create members or add to calendar. Link them in **Link to Members**, then review again.
+- Anonymous votes and votes without play dates aren't added to calendar.
+
+Other votes aren't touched. To auto-start bridge on Mac login: `zsh tools/zalo-bridge/install-agent.sh`. Log: `~/.culong/zalo-bridge.log`.
+
+Away from home: install Tailscale on Mac and iPhone. **Zalo** tab → **Change Group** and change host to Tailscale IP (`100.x`).
+
+### When Mac is Off
+
+Zalo tab says can't reach Mac. Calendar and members stay unchanged.
+
+**Switching devices:** Month tab → **Backup**.
+
+- Small data: **Export JSON** (copy / AirDrop text). Other device **Import JSON** → Paste JSON.
+- Large data (>50KB): export/import via `.json` file.
+
+Import replaces all data on the receiving device.
+
+## Run on iOS
+
+Requires Node 20+ (recommend 24).
+
+### Real Device, No Apple Signing (Expo Go)
+
+SDK 57 on iPhone: must log into the **same Expo account** (free) on Mac and in Expo Go. This is not an Apple Developer account.
+
+1. Create free account: https://expo.dev/signup
+2. Install [Expo Go](https://apps.apple.com/app/expo-go/id982107779) from App Store.
+3. On Mac:
+
+```bash
+cd badminton-expense
 nvm use 24
 npx expo login
 npm start
 ```
 
-4. Trong Expo Go: tab Home → icon avatar góc phải → đăng nhập **cùng tài khoản**.
-5. Mac và iPhone cùng Wi‑Fi, quét QR.
-6. Nếu không vào được, chạy `npx expo start --tunnel`.
+4. In Expo Go: Home tab → avatar icon top-right → log in with **same account**.
+5. Mac and iPhone on same Wi-Fi, scan QR.
+6. If can't connect, run `npx expo start --tunnel`.
 
-App chạy trong Expo Go. Tắt Metro (`Ctrl+C`) thì mở lại phải `npm start` rồi vào lại.
+App runs in Expo Go. Closing Metro (`Ctrl+C`) requires `npm start` again to reopen.
 
-Không làm được: icon riêng trên Home Screen như app cài hẳn, đưa cho người khác cài file `.ipa`. Muốn vậy vẫn phải ký với Apple (tài khoản dev, 7 ngày nếu dùng Apple ID miễn phí).
+Can't do: custom icon on Home Screen, share `.ipa` file. That still requires Apple signing (dev account, free tier lasts 7 days).
 
-### App độc lập trên máy thật (không cần `npm start`)
+### Standalone App on Real Device (no `npm start`)
 
-JS được đóng vào app. Cài xong mở icon **Cầu Lông** như app thường.
+JS bundled into app. After install, open **Badminton** icon like any app.
 
-iOS **bắt buộc ký**. Không có cách cài app độc lập mà bỏ hẳn bước này.
+iOS **requires signing**. No way to install standalone without this step.
 
-**Cách rẻ nhất (Apple ID miễn phí, ~7 ngày rồi build lại):**
+**Cheapest option (free Apple ID, ~7 days then rebuild):**
 
-1. Cắm iPhone vào Mac, tin tưởng máy, bật **Developer Mode** (Cài đặt → Quyền riêng tư).
-2. Xcode → Settings → Accounts → thêm Apple ID (không cần trả $99).
-3. Lần đầu mở Xcode, chọn team Personal cho app nếu được hỏi.
+1. Plug iPhone into Mac, trust device, enable **Developer Mode** (Settings → Privacy).
+2. Xcode → Settings → Accounts → add Apple ID (no $99 needed).
+3. First time opening Xcode, select Personal team for app if prompted.
 
 ```bash
-cd chia-tien-cau-long
+cd badminton-expense
 nvm use 24
 npm run ios:install
 ```
 
-Lệnh này build Release, cài lên iPhone, **không gắn debugger**. Tắt Xcode app vẫn chạy. Mở từ icon **Cầu Lông** trên Home Screen.
+This builds Release, installs to iPhone, **no debugger attached**. Closing Xcode app keeps running. Open from **Badminton** icon on Home Screen.
 
-Nếu bấm ▶ trong Xcode (hoặc `npm run ios:device`) thì Xcode giữ debugger — tắt Xcode là app bị kill. Đừng mở app từ nút ▶ nếu muốn dùng độc lập.
+If you press ▶ in Xcode (or `npm run ios:device`), Xcode holds debugger — closing Xcode kills app. Don't open from ▶ if you want standalone usage.
 
-Hết hạn ~7 ngày: cắm máy, chạy lại `npm run ios:device`.
+Expires ~7 days: plug in, run `npm run ios:device` again.
 
-**Muốn bền (TestFlight, không phải build lại 7 ngày):** Apple Developer Program **$99/năm**, rồi `eas build --platform ios` / TestFlight.
+**Want durability (TestFlight, no 7-day rebuild):** Apple Developer Program **$99/year**, then `eas build --platform ios` / TestFlight.

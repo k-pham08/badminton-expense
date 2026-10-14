@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { EMPTY_DATA, type AppData, type Court, type CourtSlot, type MonthData, type Session, type ZaloContact } from './types';
-import { findMemberByName, zaloPersonId, type ZaloPerson } from './utils/vote';
+import { findMemberByName, matchVoteNames, zaloPersonId, type ZaloPerson } from './utils/vote';
 import { computePlayingDates, datesForWeekdays, weekdayMon0FromDateId } from './utils/date';
 import { hoursBetween } from './utils/time';
 import { attendeeHoursOf, slotsOf } from './utils/calc';
@@ -56,7 +56,12 @@ type Store = {
   addMemberZaloName: (id: string, zaloName: string) => void;
   removeMemberZaloName: (id: string, zaloName: string) => void;
   applyZaloLinks: (rows: { zaloName: string; memberId: string }[]) => void;
-  importZaloPeople: (people: ZaloPerson[]) => number;
+  importZaloPeople: (people: ZaloPerson[], options?: { complete?: boolean }) => number;
+  syncVoteAttendees: (
+    monthId: string,
+    entries: { date: string; names: string[]; voterIds?: string[] }[],
+    options?: { restoreSkipped?: boolean },
+  ) => { applied: string[]; drifted: string[] };
   linkZaloContact: (contactId: string, memberId: string) => void;
   unlinkZaloContact: (contactId: string) => void;
   createMemberFromZalo: (contactId: string) => string | null;
@@ -81,6 +86,14 @@ type Store = {
   setSessionPaidIds: (monthId: string, date: string, paidIds: string[]) => void;
   setMemberMonthPaid: (monthId: string, memberId: string, paid: boolean) => void;
   importData: (next: AppData) => void;
+  ensureZaloMember: (person: ZaloPerson) => void;
+  linkZaloPerson: (person: ZaloPerson, memberId: string) => void;
+  applyZaloPoll: (
+    people: ZaloPerson[],
+    create: { id?: string; name: string }[],
+    entries: { date: string; names: string[]; voterIds?: string[] }[],
+  ) => void;
+  applyLinkedZaloVote: (monthId: string, days: { date: string; memberIds: string[] }[]) => void;
 };
 
 const StoreContext = createContext<Store | null>(null);
@@ -94,6 +107,276 @@ function withMonth(data: AppData, monthId: string, updater: (month: MonthData) =
       [monthId]: updater(current),
     },
   };
+}
+
+function nameKey(value: string): string {
+  return value.normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function avatarKey(value: string): string {
+  return value.replace(/&amp;/g, '&').replace(/\?.*$/, '').trim().toLowerCase();
+}
+
+function onlyOne(items: ZaloContact[] | undefined): ZaloContact | undefined {
+  return items?.length === 1 ? items[0] : undefined;
+}
+
+export function sessionHasMoney(session: Session | undefined): boolean {
+  if (!session) return false;
+  if ((session.courtFee ?? 0) > 0) return true;
+  if ((session.shuttleCount ?? 0) > 0) return true;
+  if ((session.extraShuttles ?? []).some((item) => item.count > 0 || item.price > 0)) return true;
+  if ((session.paidIds ?? []).length > 0) return true;
+  if ((session.courts ?? []).length > 0) return true;
+  return false;
+}
+
+function sameIdSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const ids = new Set(left);
+  return right.every((id) => ids.has(id));
+}
+
+function dataWithImportedPeople(prev: AppData, people: ZaloPerson[], complete: boolean): AppData {
+  if (!people.length && !complete) return prev;
+  const map = new Map<string, ZaloContact>();
+  const byName = new Map<string, ZaloContact[]>();
+  const byAvatar = new Map<string, ZaloContact[]>();
+  for (const item of prev.zaloContacts ?? []) {
+    const id = item.id || zaloPersonId(item.name, item.avatar);
+    const contact = { ...item, id };
+    map.set(id, contact);
+    const named = nameKey(contact.name);
+    if (named) byName.set(named, [...(byName.get(named) ?? []), contact]);
+    const imaged = avatarKey(contact.avatar);
+    if (imaged) byAvatar.set(imaged, [...(byAvatar.get(imaged) ?? []), contact]);
+  }
+  const consumed = new Set<string>();
+  for (const person of people) {
+    const id = person.id || zaloPersonId(person.name, person.avatar);
+    let old = map.get(id);
+    if (!old) {
+      const found = onlyOne(byName.get(nameKey(person.name))) ?? onlyOne(byAvatar.get(avatarKey(person.avatar)));
+      if (found && found.id !== id && !consumed.has(found.id)) {
+        old = found;
+        map.delete(found.id);
+        consumed.add(found.id);
+      }
+    }
+    const auto = old?.memberId || findMemberByName(prev.members, person.name)?.id;
+    map.set(id, {
+      id,
+      name: person.name.trim(),
+      avatar: person.avatar || old?.avatar || '',
+      memberId: auto,
+    });
+  }
+  if (complete) {
+    const incoming = new Set(people.map((person) => person.id || zaloPersonId(person.name, person.avatar)));
+    for (const [id, contact] of map) {
+      if (!incoming.has(id) && !contact.memberId) map.delete(id);
+    }
+  }
+  const zaloContacts = [...map.values()];
+  const members = prev.members.map((member) => {
+    const contact = zaloContacts.find((item) => item.memberId === member.id);
+    if (!contact) return member;
+    const zaloNames = (member.zaloNames ?? []).filter(
+      (item) => item.trim().toLowerCase() !== contact.name.toLowerCase(),
+    );
+    const nextNames =
+      member.name.trim().toLowerCase() === contact.name.toLowerCase() ? zaloNames : [...zaloNames, contact.name];
+    return {
+      ...member,
+      zaloNames: nextNames,
+      zaloAvatar: contact.avatar || member.zaloAvatar,
+    };
+  });
+  return { ...prev, zaloContacts, members };
+}
+
+function dataWithLinkedContact(prev: AppData, contactId: string, memberId: string): AppData {
+  if (!contactId || !memberId) return prev;
+  const zaloContacts = (prev.zaloContacts ?? []).map((item) => {
+    const id = item.id || zaloPersonId(item.name, item.avatar);
+    if (id === contactId) return { ...item, id, memberId };
+    if (item.memberId === memberId) return { ...item, id, memberId: undefined };
+    return { ...item, id };
+  });
+  const contact = zaloContacts.find((item) => item.id === contactId);
+  if (!contact) return prev;
+  const key = contact.name.trim().toLowerCase();
+  const members = prev.members.map((member) => {
+    let zaloNames = (member.zaloNames ?? []).filter((item) => item.trim().toLowerCase() !== key);
+    if (member.id !== memberId) {
+      return {
+        ...member,
+        zaloNames,
+        zaloAvatar: member.zaloAvatar === contact.avatar ? undefined : member.zaloAvatar,
+      };
+    }
+    if (member.name.trim().toLowerCase() !== key) zaloNames = [...zaloNames, contact.name];
+    return { ...member, zaloNames, zaloAvatar: contact.avatar || member.zaloAvatar };
+  });
+  return { ...prev, zaloContacts, members };
+}
+
+function dataWithCreatedZaloMember(prev: AppData, contactId: string): AppData {
+  const contact = (prev.zaloContacts ?? []).find(
+    (item) => (item.id || zaloPersonId(item.name, item.avatar)) === contactId,
+  );
+  if (!contact) return prev;
+  const found = findMemberByName(prev.members, contact.name);
+  const id = found?.id || newId('m');
+  const members = found
+    ? prev.members.map((member) =>
+        member.id === id ? { ...member, zaloAvatar: contact.avatar || member.zaloAvatar } : member,
+      )
+    : [...prev.members, { id, name: contact.name, zaloAvatar: contact.avatar }];
+  const zaloContacts = (prev.zaloContacts ?? []).map((item) => {
+    const itemId = item.id || zaloPersonId(item.name, item.avatar);
+    return itemId === contactId ? { ...item, id: itemId, memberId: id } : { ...item, id: itemId };
+  });
+  return { ...prev, members, zaloContacts };
+}
+
+function dataWithNamedMember(prev: AppData, name: string): AppData {
+  const trimmed = name.trim();
+  if (!trimmed || findMemberByName(prev.members, trimmed)) return prev;
+  return { ...prev, members: [...prev.members, { id: newId('m'), name: trimmed }] };
+}
+
+function dataWithVoteDays(
+  prev: AppData,
+  monthId: string,
+  entries: { date: string; names: string[]; voterIds?: string[] }[],
+  restoreSkipped: boolean,
+): { data: AppData; applied: string[]; drifted: string[] } {
+  let applied: string[] = [];
+  let drifted: string[] = [];
+  const data = withMonth(prev, monthId, (month) => {
+    const unique = new Map<string, string[]>();
+    for (const entry of entries) {
+      if (!entry.date.startsWith(`${monthId}-`) || entry.names.length === 0) continue;
+      const { matched } = matchVoteNames(entry.names, prev.members, entry.voterIds, prev.zaloContacts);
+      if (!matched.length) continue;
+      const ids = matched.map((member) => member.id);
+      const prevIds = unique.get(entry.date);
+      if (!prevIds || ids.length >= prevIds.length) unique.set(entry.date, ids);
+    }
+    const skipped = new Set(month.skippedDates ?? []);
+    let skippedDates = [...(month.skippedDates ?? [])];
+    const generated = datesForWeekdays(monthId, month.weekdays ?? []);
+    const extraDates = [...(month.extraDates ?? [])];
+    const drift: string[] = [];
+    const apply = new Map<string, string[]>();
+    for (const [date, ids] of unique) {
+      const session = month.sessions[date];
+      if (sessionHasMoney(session)) {
+        if (session && !sameIdSet(session.attendeeIds ?? [], ids)) drift.push(date);
+        continue;
+      }
+      if (skipped.has(date)) {
+        if (!restoreSkipped) continue;
+        skippedDates = skippedDates.filter((item) => item !== date);
+      }
+      if (!generated.includes(date) && !extraDates.includes(date)) extraDates.push(date);
+      apply.set(date, ids);
+    }
+    applied = [...apply.keys()];
+    drifted = drift;
+    if (
+      !apply.size &&
+      sameIdSet(extraDates, month.extraDates ?? []) &&
+      sameIdSet(skippedDates, month.skippedDates ?? [])
+    ) {
+      return month;
+    }
+    const next = withPlayingDates({ ...month, extraDates, skippedDates });
+    const sessions = { ...next.sessions };
+    for (const [date, ids] of apply) {
+      const existing = sessions[date];
+      if (!existing) {
+        sessions[date] = {
+          date,
+          courtFee: 0,
+          courts: [],
+          shuttleCount: 0,
+          extraShuttles: [],
+          attendeeIds: ids,
+          attendeeCount: ids.length,
+          attendeeHours: {},
+          paidIds: [],
+          saved: false,
+        };
+        continue;
+      }
+      sessions[date] = {
+        ...existing,
+        attendeeIds: ids,
+        attendeeCount: ids.length,
+        attendeeHours: attendeeHoursOf({ attendeeIds: ids, attendeeHours: existing.attendeeHours }),
+        paidIds: (existing.paidIds ?? []).filter((id) => ids.includes(id)),
+        saved: existing.saved,
+      };
+    }
+    return { ...next, sessions };
+  });
+  return { data, applied, drifted };
+}
+
+function dataWithLinkedVote(
+  prev: AppData,
+  monthId: string,
+  days: { date: string; memberIds: string[] }[],
+): AppData {
+  const linked = new Set<string>();
+  for (const contact of prev.zaloContacts ?? []) if (contact.memberId) linked.add(contact.memberId);
+  const known = new Set(prev.members.map((member) => member.id));
+  return withMonth(prev, monthId, (month) => {
+    const playing = new Set(
+      computePlayingDates(month.id, month.weekdays ?? [], month.skippedDates ?? [], month.extraDates ?? []),
+    );
+    const sessions = { ...month.sessions };
+    let changed = false;
+    for (const day of days) {
+      if (!playing.has(day.date)) continue;
+      const existing = sessions[day.date];
+      if (sessionHasMoney(existing)) continue;
+      const current = existing?.attendeeIds ?? [];
+      const manual = current.filter((id) => known.has(id) && !linked.has(id));
+      const fromVote = day.memberIds.filter((id) => linked.has(id) && known.has(id));
+      const ids = [...new Set([...manual, ...fromVote])];
+      if (existing && sameIdSet(ids, current)) continue;
+      if (!existing && ids.length === 0) continue;
+      changed = true;
+      if (!existing) {
+        sessions[day.date] = {
+          date: day.date,
+          courtFee: 0,
+          courts: [],
+          shuttleCount: 0,
+          extraShuttles: [],
+          attendeeIds: ids,
+          attendeeCount: ids.length,
+          attendeeHours: {},
+          paidIds: [],
+          saved: false,
+        };
+        continue;
+      }
+      sessions[day.date] = {
+        ...existing,
+        attendeeIds: ids,
+        attendeeCount: ids.length,
+        attendeeHours: attendeeHoursOf({ attendeeIds: ids, attendeeHours: existing.attendeeHours }),
+        paidIds: (existing.paidIds ?? []).filter((id) => ids.includes(id)),
+        saved: existing.saved,
+      };
+    }
+    if (!changed) return month;
+    return { ...month, sessions };
+  });
 }
 
 function sessionWithAttendees(
@@ -266,17 +549,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const importZaloPeople = useCallback((people: ZaloPerson[]): number => {
-    if (!people.length) return 0;
+  const importZaloPeople = useCallback((people: ZaloPerson[], options?: { complete?: boolean }): number => {
+    if (!people.length && !options?.complete) return 0;
     setData((prev) => {
       const map = new Map<string, ZaloContact>();
+      const byName = new Map<string, ZaloContact[]>();
+      const byAvatar = new Map<string, ZaloContact[]>();
       for (const item of prev.zaloContacts ?? []) {
         const id = item.id || zaloPersonId(item.name, item.avatar);
-        map.set(id, { ...item, id });
+        const contact = { ...item, id };
+        map.set(id, contact);
+        const named = nameKey(contact.name);
+        if (named) byName.set(named, [...(byName.get(named) ?? []), contact]);
+        const imaged = avatarKey(contact.avatar);
+        if (imaged) byAvatar.set(imaged, [...(byAvatar.get(imaged) ?? []), contact]);
       }
+      const consumed = new Set<string>();
       for (const person of people) {
         const id = person.id || zaloPersonId(person.name, person.avatar);
-        const old = map.get(id);
+        let old = map.get(id);
+        if (!old) {
+          const found = onlyOne(byName.get(nameKey(person.name))) ?? onlyOne(byAvatar.get(avatarKey(person.avatar)));
+          if (found && found.id !== id && !consumed.has(found.id)) {
+            old = found;
+            map.delete(found.id);
+            consumed.add(found.id);
+          }
+        }
         const auto = old?.memberId || findMemberByName(prev.members, person.name)?.id;
         map.set(id, {
           id,
@@ -284,6 +583,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           avatar: person.avatar || old?.avatar || '',
           memberId: auto,
         });
+      }
+      if (options?.complete) {
+        const incoming = new Set(people.map((person) => person.id || zaloPersonId(person.name, person.avatar)));
+        for (const [id, contact] of map) {
+          if (!incoming.has(id) && !contact.memberId) map.delete(id);
+        }
       }
       const zaloContacts = [...map.values()];
       const members = prev.members.map((member) => {
@@ -309,30 +614,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const linkZaloContact = useCallback((contactId: string, memberId: string) => {
     if (!contactId || !memberId) return;
-    setData((prev) => {
-      const zaloContacts = (prev.zaloContacts ?? []).map((item) => {
-        const id = item.id || zaloPersonId(item.name, item.avatar);
-        if (id === contactId) return { ...item, id, memberId };
-        if (item.memberId === memberId) return { ...item, id, memberId: undefined };
-        return { ...item, id };
-      });
-      const contact = zaloContacts.find((item) => item.id === contactId);
-      if (!contact) return prev;
-      const key = contact.name.trim().toLowerCase();
-      const members = prev.members.map((member) => {
-        let zaloNames = (member.zaloNames ?? []).filter((item) => item.trim().toLowerCase() !== key);
-        if (member.id !== memberId) {
-          return {
-            ...member,
-            zaloNames,
-            zaloAvatar: member.zaloAvatar === contact.avatar ? undefined : member.zaloAvatar,
-          };
-        }
-        if (member.name.trim().toLowerCase() !== key) zaloNames = [...zaloNames, contact.name];
-        return { ...member, zaloNames, zaloAvatar: contact.avatar || member.zaloAvatar };
-      });
-      return { ...prev, zaloContacts, members };
-    });
+    setData((prev) => dataWithLinkedContact(prev, contactId, memberId));
+  }, []);
+
+  const linkZaloPerson = useCallback((person: ZaloPerson, memberId: string) => {
+    if (!person.id || !memberId) return;
+    setData((prev) => dataWithLinkedContact(dataWithImportedPeople(prev, [person], false), person.id, memberId));
   }, []);
 
   const unlinkZaloContact = useCallback((contactId: string) => {
@@ -700,6 +987,65 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const syncVoteAttendees = useCallback(
+    (
+      monthId: string,
+      entries: { date: string; names: string[]; voterIds?: string[] }[],
+      options?: { restoreSkipped?: boolean },
+    ): { applied: string[]; drifted: string[] } => {
+      let applied: string[] = [];
+      let drifted: string[] = [];
+      setData((prev) => {
+        const result = dataWithVoteDays(prev, monthId, entries, Boolean(options?.restoreSkipped));
+        applied = result.applied;
+        drifted = result.drifted;
+        return result.data;
+      });
+      return { applied, drifted };
+    },
+    [],
+  );
+
+  const ensureZaloMember = useCallback((person: ZaloPerson) => {
+    setData((prev) => {
+      const imported = dataWithImportedPeople(prev, [person], false);
+      const created = dataWithCreatedZaloMember(imported, person.id);
+      return findMemberByName(created.members, person.name) ? created : dataWithNamedMember(created, person.name);
+    });
+  }, []);
+
+  const applyZaloPoll = useCallback(
+    (
+      people: ZaloPerson[],
+      create: { id?: string; name: string }[],
+      entries: { date: string; names: string[]; voterIds?: string[] }[],
+    ) => {
+      setData((prev) => {
+        let data = dataWithImportedPeople(prev, people, false);
+        for (const item of create) {
+          if (item.id) data = dataWithCreatedZaloMember(data, item.id);
+          if (!findMemberByName(data.members, item.name)) data = dataWithNamedMember(data, item.name);
+        }
+        const byMonth = new Map<string, { date: string; names: string[]; voterIds?: string[] }[]>();
+        for (const entry of entries) {
+          const monthId = entry.date.slice(0, 7);
+          const list = byMonth.get(monthId) ?? [];
+          list.push(entry);
+          byMonth.set(monthId, list);
+        }
+        for (const [monthId, list] of byMonth) {
+          data = dataWithVoteDays(data, monthId, list, true).data;
+        }
+        return data;
+      });
+    },
+    [],
+  );
+
+  const applyLinkedZaloVote = useCallback((monthId: string, days: { date: string; memberIds: string[] }[]) => {
+    setData((prev) => dataWithLinkedVote(prev, monthId, days));
+  }, []);
+
   const applyMonthVote = useCallback(
     (monthId: string, entries: { date: string; attendeeIds: string[] }[]): number => {
       const unique = new Map<string, string[]>();
@@ -837,10 +1183,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       saveSession,
       setSessionAttendees,
       applyMonthVote,
+      syncVoteAttendees,
       applySessionToWeekday,
       setSessionPaidIds,
       setMemberMonthPaid,
       importData,
+      ensureZaloMember,
+      linkZaloPerson,
+      applyZaloPoll,
+      applyLinkedZaloVote,
     }),
     [
       ready,
@@ -872,10 +1223,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       saveSession,
       setSessionAttendees,
       applyMonthVote,
+      syncVoteAttendees,
       applySessionToWeekday,
       setSessionPaidIds,
       setMemberMonthPaid,
       importData,
+      ensureZaloMember,
+      linkZaloPerson,
+      applyZaloPoll,
+      applyLinkedZaloVote,
     ],
   );
 

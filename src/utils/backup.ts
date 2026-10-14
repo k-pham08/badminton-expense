@@ -39,11 +39,11 @@ export function parseBackup(raw: string): AppData {
     throw new Error('Không phải JSON hợp lệ.');
   }
   if (!parsed || typeof parsed !== 'object') {
-    throw new Error('Không phải dữ liệu Cầu Lông.');
+    throw new Error('Not valid Badminton data.');
   }
   const value = parsed as Partial<BackupFile>;
   if (value.version !== 1 || !Array.isArray(value.members) || !value.months || typeof value.months !== 'object') {
-    throw new Error('Không đúng định dạng app Cầu Lông.');
+    throw new Error('Not a valid Badminton app backup.');
   }
   return {
     ...EMPTY_DATA,

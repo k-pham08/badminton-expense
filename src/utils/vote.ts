@@ -1,4 +1,4 @@
-import type { Member } from '../types';
+import type { Member, ZaloContact } from '../types';
 
 const SKIP =
   /^(đi|ko đi|không đi|không|vang|vắng|có|ok|vote|bình chọn|binh chon|đã bình chọn|xem tất cả|xem thêm|thu gọn|kết bạn|phó nhóm|trưởng nhóm|admin|người|trái|sân)$/i;
@@ -161,6 +161,9 @@ export type ZaloVoteDay = {
   title: string;
   dateId: string | null;
   names: string[];
+  /** Cùng thứ tự với names. Id Zalo của người vote. */
+  voterIds?: string[];
+  anonymous?: boolean;
 };
 
 const TITLE_DATE =
@@ -244,13 +247,20 @@ export function pickMemberForVoteName(name: string, members: Member[]): Member |
 export function matchVoteNames(
   names: string[],
   members: Member[],
+  voterIds?: string[],
+  contacts?: ZaloContact[],
 ): { matched: Member[]; unknown: string[]; pairs: { name: string; member: Member | null }[] } {
+  const contactById = new Map((contacts ?? []).map((contact) => [contact.id, contact]));
+  const memberById = new Map(members.map((member) => [member.id, member]));
   const matched: Member[] = [];
   const unknown: string[] = [];
   const pairs: { name: string; member: Member | null }[] = [];
   const seen = new Set<string>();
-  for (const name of names) {
-    const member = pickMemberForVoteName(name, members) ?? null;
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
+    const linkedId = voterIds?.[index] ? contactById.get(voterIds[index])?.memberId : undefined;
+    const member =
+      (linkedId ? memberById.get(linkedId) : undefined) ?? pickMemberForVoteName(name, members) ?? null;
     pairs.push({ name, member });
     if (!member) {
       unknown.push(name);

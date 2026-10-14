@@ -98,4 +98,4 @@ export const EMPTY_DATA: AppData = {
   months: {},
 };
 
-export type TabName = 'month' | 'summary' | 'members' | 'courts';
+export type TabName = 'month' | 'summary' | 'members' | 'courts' | 'zalo';

@@ -1,14 +1,17 @@
 {
   "expo": {
-    "name": "Cầu Lông",
-    "slug": "chia-tien-cau-long",
+    "name": "Badminton",
+    "slug": "badminton-expense",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.khoapham.chiatiencauLong"
+      "bundleIdentifier": "com.khoapham.badminton-expense",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "App reads member list and vote sheets from Mac on the same Wi-Fi."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -17,7 +20,8 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.khoapham.badmintonexpense"
     },
     "web": {
       "favicon": "./assets/favicon.png"

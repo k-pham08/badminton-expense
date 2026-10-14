@@ -2,6 +2,7 @@
 
 # dependencies
 node_modules/
+tools/zalo-bridge/node_modules/
 
 # Expo
 .expo/
@@ -38,4 +39,12 @@ yarn-error.*
 
 # generated native folders
 /ios
-/android
+# /android  # commented out to commit Android project
+.gitnexus
+
+# Android build artifacts (keep source files)
+/android/build/
+/android/.gradle/
+/android/app/build/
+/android/app/.cxx/
+/android/buildOutputCleanup/

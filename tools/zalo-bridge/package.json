@@ -1,0 +1,12 @@
+{
+  "name": "culong-zalo-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test map.test.mjs cookie-host.test.mjs"
+  },
+  "dependencies": {
+    "zalo-api-final": "2.1.0"
+  }
+}

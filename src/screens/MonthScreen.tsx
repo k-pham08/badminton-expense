@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { BackupCard } from '../components/BackupCard';
 import { Calendar } from '../components/Calendar';
-import { Card, MoneyInput, SecondaryButton, SectionTitle, TextField } from '../components/ui';
-import { VoteImportModal } from '../components/VoteImportModal';
+import { Card, MoneyInput, SectionTitle, TextField } from '../components/ui';
 import { lastSavedSession, useStore } from '../store';
 import { colors, space } from '../theme';
 import { sessionSplit } from '../utils/calc';
@@ -19,10 +18,8 @@ type Props = {
 export function MonthScreen({ monthId, onChangeMonth, onOpenSession }: Props) {
   const store = useStore();
   const month = store.month(monthId);
-  const [voteOpen, setVoteOpen] = useState(false);
   const [shuttleNameDraft, setShuttleNameDraft] = useState(month.shuttleName ?? '');
   const savedDates = month.playingDates.filter((date) => month.sessions[date]?.saved);
-  const votedDates = month.playingDates.filter((date) => (month.sessions[date]?.attendeeIds.length ?? 0) > 0);
 
   useEffect(() => {
     setShuttleNameDraft(month.shuttleName ?? '');
@@ -116,19 +113,6 @@ export function MonthScreen({ monthId, onChangeMonth, onOpenSession }: Props) {
       </Card>
 
       <Card>
-        <SectionTitle>Vote Zalo tháng này</SectionTitle>
-        <Text style={styles.hint}>
-          Dán cả phiếu vote (nhiều ngày). App gán người vào từng buổi; ngày chưa có trên lịch sẽ được thêm lẻ.
-        </Text>
-        <SecondaryButton label="Dán phiếu vote" onPress={() => setVoteOpen(true)} />
-        {votedDates.length > 0 ? (
-          <Text style={styles.voteStatus}>
-            {votedDates.length}/{month.playingDates.length} buổi đã có người
-          </Text>
-        ) : null}
-      </Card>
-
-      <Card>
         <SectionTitle>Ngày đánh</SectionTitle>
         <Text style={styles.hint}>Chạm ngày để xem hoặc chỉnh. Giữ lâu để bỏ ngày này.</Text>
         <Calendar
@@ -188,8 +172,6 @@ export function MonthScreen({ monthId, onChangeMonth, onOpenSession }: Props) {
       </Card>
 
       <BackupCard />
-
-      <VoteImportModal visible={voteOpen} monthId={monthId} onClose={() => setVoteOpen(false)} />
     </ScrollView>
   );
 }
@@ -314,11 +296,5 @@ const styles = StyleSheet.create({
   muted: {
     color: colors.muted,
     fontWeight: '500',
-  },
-  voteStatus: {
-    marginTop: 10,
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.primary,
   },
 });

@@ -2,14 +2,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORKSPACE="$ROOT/ios/CuLng.xcworkspace"
-SCHEME="CuLng"
-BUNDLE_ID="com.khoapham.chiatiencauLong"
+WORKSPACE="$ROOT/ios/BadmintonApp.xcworkspace"
+SCHEME="BadmintonApp"
+BUNDLE_ID="com.khoapham.badminton-expense"
 TEAM="44GB59FSW2"
-APP="$HOME/Library/Developer/Xcode/DerivedData/CuLng-gwkltqxbizvuxgdetugxtotdhvba/Build/Products/Release-iphoneos/CuLng.app"
+APP="$HOME/Library/Developer/Xcode/DerivedData/BadmintonApp-gwkltqxbizvuxgdetugxtotdhvba/Build/Products/Release-iphoneos/BadmintonApp.app"
 
 if [[ ! -d "$WORKSPACE" ]]; then
-  echo "Chưa có ios/CuLng.xcworkspace. Chạy: npx expo prebuild --platform ios"
+  echo "ios/BadmintonApp.xcworkspace not found. Run: npx expo prebuild --platform ios"
   exit 1
 fi
 
@@ -22,12 +22,12 @@ DEVICE_ID="$(
 )"
 
 if [[ -z "${DEVICE_ID:-}" ]]; then
-  echo "Không thấy iPhone cắm máy."
+  echo "No iPhone found."
   exit 1
 fi
 
 echo "Device: $DEVICE_ID"
-echo "Building Release (không gắn debugger)..."
+echo "Building Release (no debugger)..."
 
 xcodebuild \
   -workspace "$WORKSPACE" \
@@ -39,11 +39,11 @@ xcodebuild \
   CODE_SIGN_STYLE=Automatic
 
 if [[ ! -d "$APP" ]]; then
-  APP="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*/Release-iphoneos/CuLng.app' -type d | head -n 1)"
+  APP="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*/Release-iphoneos/BadmintonApp.app' -type d | head -n 1)"
 fi
 
 if [[ -z "${APP:-}" || ! -d "$APP" ]]; then
-  echo "Không tìm thấy CuLng.app sau khi build."
+  echo "BadmintonApp.app not found after build."
   exit 1
 fi
 
@@ -52,4 +52,4 @@ xcrun devicectl device install app --device "$DEVICE_ID" "$APP"
 echo "Launching without debugger..."
 xcrun devicectl device process launch --device "$DEVICE_ID" "$BUNDLE_ID" || true
 echo
-echo "Xong. Mở app từ icon Home. Có thể tắt Xcode — app không bị kill."
+echo "Done. Open app from Home icon. You can close Xcode — app won't be killed."

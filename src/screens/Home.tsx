@@ -9,12 +9,14 @@ import { MembersScreen } from './MembersScreen';
 import { MonthScreen } from './MonthScreen';
 import { SessionScreen } from './SessionScreen';
 import { SummaryScreen } from './SummaryScreen';
+import { ZaloScreen } from './ZaloScreen';
 
 const TABS: { key: TabName; label: string }[] = [
   { key: 'month', label: 'Tháng' },
   { key: 'summary', label: 'Tổng kết' },
   { key: 'members', label: 'Thành viên' },
   { key: 'courts', label: 'Sân' },
+  { key: 'zalo', label: 'Zalo' },
 ];
 
 export function Home() {
@@ -46,6 +48,7 @@ export function Home() {
         ) : null}
         {tab === 'members' ? <MembersScreen /> : null}
         {tab === 'courts' ? <CourtsScreen /> : null}
+        {tab === 'zalo' ? <ZaloScreen monthId={monthId} /> : null}
       </View>
       <View style={[styles.tabBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
         {TABS.map((item) => {
@@ -56,7 +59,9 @@ export function Home() {
               onPress={() => setTab(item.key)}
               style={styles.tab}
             >
-              <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{item.label}</Text>
+              <Text style={[styles.tabLabel, active && styles.tabLabelActive]} numberOfLines={1}>
+                {item.label}
+              </Text>
             </Pressable>
           );
         })}
@@ -86,7 +91,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   tabLabel: {
-    fontSize: 15,
+    fontSize: 13,
     color: colors.muted,
     fontWeight: '600',
   },

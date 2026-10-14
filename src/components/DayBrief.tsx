@@ -119,7 +119,7 @@ export function DayBrief({
       <SafeAreaView style={styles.safe} edges={['top', 'bottom', 'left', 'right']}>
         <ViewShot ref={shotRef} style={styles.sheet} options={{ format: 'png', quality: 1, result: 'tmpfile' }}>
           <View style={styles.hero}>
-            <Text style={styles.kicker}>CẦU LÔNG</Text>
+            <Text style={styles.kicker}>BADMINTON</Text>
             <Text style={styles.date}>{formatDateLongVi(date)}</Text>
             {span ? <Text style={styles.span}>{span}</Text> : null}
           </View>
