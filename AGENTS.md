@@ -4,15 +4,15 @@
 
 | Document | Purpose |
 |----------|---------|
-| [CONTRIBUTORS.md](./CONTRIBUTORS.md) | Project overview, coding standards, commit rules |
-| [ARCHITECTURE-DECISION-RECORD.md](./ARCHITECTURE-DECISION-RECORD.md) | Architectural decisions and rationale |
-| [AGENTS.md](./AGENTS.md) | This file — agent-specific instructions |
+| [current_status.md](./current_status.md) | Live repo stats, features, tech stack |
+| [ADR.md](./ADR.md) | ADR template + index of existing decisions |
+| [ARCHITECTURE-DECISION-RECORD.md](./ARCHITECTURE-DECISION-RECORD.md) | Full ADR history |
 
 ## Quick Start
 
-1. Read [CONTRIBUTORS.md](./CONTRIBUTORS.md) before writing any code
+1. Read [current_status.md](./current_status.md) for project state
 2. Run `npx gitnexus analyze` to index the codebase
-3. Check [ARCHITECTURE-DECISION-RECORD.md](./ARCHITECTURE-DECISION-RECORD.md) for context
+3. For each architectural change, create a new ADR in `docs/adr/`
 
 ## Expo Version
 
