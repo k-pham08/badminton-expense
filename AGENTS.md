@@ -1,6 +1,22 @@
-# Expo HAS CHANGED
+# Badminton Expense — Agent Guidelines
 
-Read the exact versioned docs at https://docs.expo.dev/versions/v57.0.0/ before writing any code.
+## Documentation
+
+| Document | Purpose |
+|----------|---------|
+| [CONTRIBUTORS.md](./CONTRIBUTORS.md) | Project overview, coding standards, commit rules |
+| [ARCHITECTURE-DECISION-RECORD.md](./ARCHITECTURE-DECISION-RECORD.md) | Architectural decisions and rationale |
+| [AGENTS.md](./AGENTS.md) | This file — agent-specific instructions |
+
+## Quick Start
+
+1. Read [CONTRIBUTORS.md](./CONTRIBUTORS.md) before writing any code
+2. Run `npx gitnexus analyze` to index the codebase
+3. Check [ARCHITECTURE-DECISION-RECORD.md](./ARCHITECTURE-DECISION-RECORD.md) for context
+
+## Expo Version
+
+**SDK 57** — Read https://docs.expo.dev/versions/v57.0.0/ before writing native code.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
