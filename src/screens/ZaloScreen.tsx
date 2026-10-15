@@ -13,7 +13,7 @@ function thisMonthId(): string {
 import type { ZaloBridgePerson, ZaloPoll } from '../utils/zaloBridge';
 import type { Member, ZaloContact } from '../types';
 import type { ZaloPerson } from '../utils/vote';
-import { entriesForPoll, loadZalo, peopleForPoll, upcomingPollEntries, useZaloSyncState } from '../utils/zaloSync';
+import { entriesForPoll, loadZalo, peopleForPoll, useZaloSyncState } from '../utils/zaloSync';
 
 type Tab = 'dates' | 'members' | 'apply';
 
@@ -36,14 +36,13 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
     void loadZalo(false);
   }, []);
 
-  // Extract all dates from all polls
+  // Extract all dates from all pinned polls (no date filtering)
   const allDates = useCallback((): SelectedDate[] => {
     const dateMap = new Map<string, SelectedDate>();
-    const today = new Date();
 
     for (const poll of sync.polls) {
       if (poll.anonymous) continue;
-      const entries = upcomingPollEntries(entriesForPoll(poll, today));
+      const entries = entriesForPoll(poll); // Get ALL dates from poll, no filtering
       for (const entry of entries) {
         const existing = dateMap.get(entry.date);
         const allPeople = [...(existing?.people ?? []), ...(entry.voterIds ?? [])];
