@@ -760,13 +760,21 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
             {/* Weekday selector */}
             <Text style={styles.label}>Chọn thứ (chọn tất cả = đánh mỗi tuần):</Text>
             <View style={styles.weekdayRow}>
-              {['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map((label, index) => (
+              {[
+                { label: 'T2', day: 0 },  // Monday
+                { label: 'T3', day: 1 },  // Tuesday
+                { label: 'T4', day: 2 },  // Wednesday
+                { label: 'T5', day: 3 },  // Thursday
+                { label: 'T6', day: 4 },  // Friday
+                { label: 'T7', day: 5 },  // Saturday
+                { label: 'CN', day: 6 },  // Sunday
+              ].map(({ label, day }) => (
                 <Pressable
-                  key={index}
-                  style={[styles.weekdayBtn, createWeekdays.includes(index) && styles.weekdayBtnActive]}
-                  onPress={() => toggleCreateWeekday(index)}
+                  key={day}
+                  style={[styles.weekdayBtn, createWeekdays.includes(day) && styles.weekdayBtnActive]}
+                  onPress={() => toggleCreateWeekday(day)}
                 >
-                  <Text style={[styles.weekdayBtnText, createWeekdays.includes(index) && styles.weekdayBtnTextActive]}>
+                  <Text style={[styles.weekdayBtnText, createWeekdays.includes(day) && styles.weekdayBtnTextActive]}>
                     {label}
                   </Text>
                 </Pressable>
