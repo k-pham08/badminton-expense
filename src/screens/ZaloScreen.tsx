@@ -893,59 +893,6 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
               </Pressable>
             </View>
 
-            {/* Extra dates */}
-            <Text style={styles.label}>Ngày thêm (ngoài lịch hàng tuần):</Text>
-            {(() => {
-              const { year, month } = parseMonthId(createMonthId);
-              const total = daysInMonth(year, month);
-              const allDates: string[] = [];
-              for (let day = 1; day <= total; day++) {
-                allDates.push(`${createMonthId}-${String(day).padStart(2, '0')}`);
-              }
-              return (
-                <View style={styles.datesGrid}>
-                  {allDates.map((dateId) => {
-                    const isFromWeekday = createWeekdays.includes(weekdayMon0FromDateId(dateId));
-                    const isSelected = createSelectedDates.includes(dateId);
-                    return (
-                      <Pressable
-                        key={dateId}
-                        style={[
-                          styles.dateCell,
-                          isFromWeekday && styles.dateCellWeekday,
-                          isSelected && styles.dateCellSelected,
-                        ]}
-                        onPress={() => toggleCreateDate(dateId)}
-                      >
-                        <Text style={[
-                          styles.dateCellText,
-                          isFromWeekday && styles.dateCellTextWeekday,
-                          isSelected && styles.dateCellTextSelected,
-                        ]}>
-                          {dateId.split('-')[2]}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              );
-            })()}
-
-            {/* Extra dates - manual selection info */}
-            <Text style={styles.hint}>
-              Ngày nền xanh đậm = theo lịch hàng tuần. Bấm để chọn thêm.
-            </Text>
-
-            <View style={styles.dateActions}>
-              <Pressable onPress={selectAllCreateDates}>
-                <Text style={styles.link}>Chọn tất cả ngày</Text>
-              </Pressable>
-              <Text style={styles.separator}> · </Text>
-              <Pressable onPress={clearCreateDates}>
-                <Text style={styles.link}>Bỏ chọn</Text>
-              </Pressable>
-            </View>
-
             {/* Summary */}
             <View style={styles.pollSummary}>
               <Text style={styles.pollSummaryText}>
