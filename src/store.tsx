@@ -1115,8 +1115,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               ...existing,
               attendeeIds,
               attendeeCount: attendeeIds.length,
-              // Keep manual additions by keeping existing attendees not in the new list
-              // But this is simpler: just use the new attendeeIds
             }
           : {
               date,
@@ -1130,13 +1128,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               saved: false,
             };
 
-        // If date is not in playingDates, add it
-        const playingDates = m.playingDates.includes(date) ? m.playingDates : [...m.playingDates, date].sort();
+        // Add date to extraDates so it persists when month is reloaded
+        const extraDates = (m.extraDates ?? []).includes(date)
+          ? m.extraDates
+          : [...(m.extraDates ?? []), date];
 
         return {
           ...m,
           sessions: { ...m.sessions, [date]: session },
-          playingDates,
+          extraDates,
         };
       }),
     );
