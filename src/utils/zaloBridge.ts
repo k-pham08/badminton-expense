@@ -279,12 +279,11 @@ export type SendMessageResult = {
 export async function sendZaloMessage(
   config: ZaloConfig,
   message: string,
-  imageBase64?: string,
+  groupId?: string,
 ): Promise<SendMessageResult> {
   return zaloPost<SendMessageResult>(config.host, config.token, '/send', {
-    groupId: config.groupId,
+    groupId: groupId || config.groupId,
     message,
-    imageBase64,
   });
 }
 

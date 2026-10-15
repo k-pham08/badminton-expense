@@ -324,33 +324,27 @@ async function handleCreatePoll(client, body) {
 }
 
 async function handleSendMessage(client, body) {
-  const { groupId, message, imageBase64 } = body;
+  const { groupId, message } = body;
   if (!groupId) {
     throw new Error('Thiếu groupId');
   }
   
-  console.log(`Sending message to group ${groupId}`);
+  if (!message || !message.trim()) {
+    throw new Error('Thiếu nội dung tin nhắn');
+  }
+  
+  console.log(`Sending message to group ${groupId}, length: ${message.length}`);
   
   try {
-    const msgContent = {
-      msg: String(message || '').trim(),
-    };
+    const result = await client.sendMessage({
+      msg: message.trim().slice(0, 2000), // Limit to 2000 chars
+    }, groupId, 'group');
     
-    // Add image if provided (base64)
-    if (imageBase64) {
-      // Zalo API expects image as attachment
-      msgContent.attachments = {
-        type: 'image',
-        data: Buffer.from(imageBase64, 'base64'),
-      };
-    }
-    
-    const result = await client.sendMessage(msgContent, groupId, 'group');
-    
-    return { ok: true, message: 'Đã gửi tin nhắn', msgId: result?.message?.msgId };
+    return { ok: true, message: 'Đã gửi', msgId: result?.message?.msgId };
   } catch (error) {
-    console.log('Send message error:', error?.message || error);
-    throw error;
+    console.log('Send error:', error?.message || error);
+    // Return error message for debugging
+    throw new Error(`Zalo: ${error?.message || 'Lỗi gửi tin nhắn'}`);
   }
 }
 

@@ -38,7 +38,7 @@ import {
 import { formatDateVi, WEEKDAY_LONG, weekdayMon0FromDateId } from '../utils/date';
 import { formatVnd } from '../utils/money';
 import { hoursBetween } from '../utils/time';
-import { loadZaloConfig, sendZaloMessage } from '../utils/zaloBridge';
+import { fetchZaloGroups, loadZaloConfig, saveZaloGroup, sendZaloMessage, type ZaloGroup } from '../utils/zaloBridge';
 
 function newExtraId(): string {
   return `e_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -99,6 +99,10 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
   const [courtPickerOpen, setCourtPickerOpen] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
   const [sendZaloLoading, setSendZaloLoading] = useState(false);
+  const [sendGroups, setSendGroups] = useState<ZaloGroup[]>([]);
+  const [sendSelectedGroup, setSendSelectedGroup] = useState<string>('');
+  const [sendGroupModal, setSendGroupModal] = useState(false);
+  const [bankInfo, setBankInfo] = useState({ bank: '', stk: '', name: '' });
 
   const shuttlePrice = month.shuttlePrice;
   const shuttleName = (month.shuttleName ?? '').trim();
@@ -651,74 +655,31 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
             <Text style={styles.muted}>Đang gửi...</Text>
           </View>
         ) : (
-          <SecondaryButton
-            label="📤 Gửi vào nhóm Zalo"
-            onPress={async () => {
-              const config = await loadZaloConfig();
-              if (!config) {
-                Alert.alert('Chưa kết nối Zalo', 'Vào tab Zalo để kết nối Mac.');
-                return;
-              }
-              setSendZaloLoading(true);
-              try {
-                // Build message
-                const dateLabel = formatDateVi(date);
-                const lines: string[] = [];
-                lines.push(`📊 ${dateLabel}`);
-                lines.push('─'.repeat(20));
-                
-                // Court fees
-                const courtGroups = groupUsagesBySlot(usages.filter(u => usageHours(u) > 0 && u.pricePerHour > 0));
-                if (courtGroups.length > 0) {
-                  let totalCourt = 0;
-                  for (const slot of courtGroups) {
-                    totalCourt += slot.fee;
+          <>
+            <Pressable 
+              style={styles.zaloSendBtn}
+              onPress={async () => {
+                const config = await loadZaloConfig();
+                if (!config) {
+                  Alert.alert('Chưa kết nối Zalo', 'Vào tab Zalo để kết nối Mac.');
+                  return;
+                }
+                // Load groups
+                try {
+                  const groups = await fetchZaloGroups(config.host, config.token);
+                  setSendGroups(groups);
+                  if (!sendSelectedGroup && groups.length > 0) {
+                    setSendSelectedGroup(config.groupId || groups[0].id);
                   }
-                  lines.push(`🏸 Sân: ${formatVnd(totalCourt)}`);
+                } catch {
+                  // Use default group
                 }
-                
-                // Shuttle
-                const totalShuttle = monthlyShuttle + extraShuttleFee(extras);
-                if (totalShuttle > 0) {
-                  lines.push(`🏸 Cầu: ${formatVnd(totalShuttle)}`);
-                }
-                
-                lines.push('─'.repeat(20));
-                lines.push(`💰 Tổng: ${formatVnd(split.total)}`);
-                
-                // Per person
-                if (split.uneven) {
-                  lines.push('📋 Chia theo giờ:');
-                  const attendeeMembers = members.filter(m => attendeeIds.includes(m.id));
-                  for (const member of attendeeMembers) {
-                    const hours = split.hoursByMemberId[member.id] ?? 0;
-                    const amount = split.byMemberId[member.id] ?? 0;
-                    lines.push(`• ${member.name}: ${formatVnd(amount)} (${formatHours(hours)}h)`);
-                  }
-                } else if (people > 0) {
-                  lines.push(`👥 ${people} người × ${formatVnd(share)}/người`);
-                }
-                
-                // Bank info placeholder
-                lines.push('─'.repeat(20));
-                lines.push('🏦 TK: [Nhập số TK]');
-                lines.push('📌 CTK: [Nhập tên]');
-                lines.push('🌊 Ngân hàng: [Nhập NH]');
-                
-                const message = lines.join('\n');
-                const result = await sendZaloMessage(config, message);
-                if (result.ok) {
-                  Alert.alert('Đã gửi', 'Tin nhắn đã gửi vào nhóm Zalo.');
-                } else {
-                  Alert.alert('Lỗi', result.error || 'Không gửi được');
-                }
-              } catch (error) {
-                Alert.alert('Lỗi', error instanceof Error ? error.message : 'Không gửi được');
-              } finally {
-                setSendZaloLoading(false);
-              }
-            }}
-          />
+                setSendGroupModal(true);
+              }}
+            >
+              <Text style={styles.zaloSendBtnText}>📤 Gửi vào nhóm Zalo</Text>
+            </Pressable>
+          </>
         )}
 
       </ScrollView>
@@ -746,6 +707,102 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
         share={share}
         onClose={() => setBriefOpen(false)}
       />
+
+      {/* Send to Zalo Modal */}
+      <Modal visible={sendGroupModal} animationType="slide" presentationStyle="pageSheet">
+        <SafeAreaView style={styles.pickerSafe}>
+          <View style={styles.pickerHeader}>
+            <Text style={styles.pickerTitle}>Gửi vào nhóm Zalo</Text>
+            <Pressable onPress={() => setSendGroupModal(false)}>
+              <Text style={styles.link}>Hủy</Text>
+            </Pressable>
+          </View>
+          <ScrollView style={styles.pickerBody}>
+            {/* Group selection */}
+            <Text style={styles.pickerLabel}>Chọn nhóm:</Text>
+            {sendGroups.map((group) => (
+              <Pressable
+                key={group.id}
+                style={[styles.pickerItem, sendSelectedGroup === group.id && styles.pickerItemSelected]}
+                onPress={() => {
+                  setSendSelectedGroup(group.id);
+                  void saveZaloGroup(group.id, group.name);
+                }}
+              >
+                <Text style={styles.pickerItemText}>{group.name}</Text>
+                <Text style={styles.pickerItemMeta}>{group.totalMember} người</Text>
+              </Pressable>
+            ))}
+            
+            <Pressable
+              style={styles.sendBtn}
+              onPress={async () => {
+                const config = await loadZaloConfig();
+                if (!config) {
+                  Alert.alert('Lỗi', 'Chưa kết nối Zalo');
+                  return;
+                }
+                setSendZaloLoading(true);
+                setSendGroupModal(false);
+                try {
+                  // Build message
+                  const dateLabel = formatDateVi(date);
+                  const lines: string[] = [];
+                  lines.push(`📊 ${dateLabel}`);
+                  lines.push('─'.repeat(20));
+                  
+                  // Court fees
+                  const courtGroups = groupUsagesBySlot(usages.filter(u => usageHours(u) > 0 && u.pricePerHour > 0));
+                  if (courtGroups.length > 0) {
+                    let totalCourt = 0;
+                    for (const slot of courtGroups) {
+                      totalCourt += slot.fee;
+                    }
+                    lines.push(`🏸 Sân: ${formatVnd(totalCourt)}`);
+                  }
+                  
+                  // Shuttle
+                  const totalShuttle = monthlyShuttle + extraShuttleFee(extras);
+                  if (totalShuttle > 0) {
+                    lines.push(`🏸 Cầu: ${formatVnd(totalShuttle)}`);
+                  }
+                  
+                  lines.push('─'.repeat(20));
+                  lines.push(`💰 Tổng: ${formatVnd(split.total)}`);
+                  
+                  // Per person
+                  if (split.uneven) {
+                    lines.push('📋 Chia theo giờ:');
+                    const attendeeMembers = members.filter(m => attendeeIds.includes(m.id));
+                    for (const member of attendeeMembers) {
+                      const hours = split.hoursByMemberId[member.id] ?? 0;
+                      const amount = split.byMemberId[member.id] ?? 0;
+                      lines.push(`• ${member.name}: ${formatVnd(amount)} (${formatHours(hours)}h)`);
+                    }
+                  } else if (people > 0) {
+                    lines.push(`👥 ${people} người × ${formatVnd(share)}/người`);
+                  }
+                  
+                  const message = lines.join('\n');
+                  const result = await sendZaloMessage(config, message, sendSelectedGroup);
+                  
+                  if (result.ok) {
+                    Alert.alert('Đã gửi', 'Tin nhắn đã gửi vào nhóm Zalo.');
+                  } else {
+                    Alert.alert('Lỗi', result.error || 'Không gửi được');
+                  }
+                } catch (error) {
+                  Alert.alert('Lỗi', error instanceof Error ? error.message : 'Không gửi được');
+                } finally {
+                  setSendZaloLoading(false);
+                }
+              }}
+            >
+              <Text style={styles.sendBtnText}>Gửi ngay</Text>
+            </Pressable>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
 
       <Modal visible={courtPickerOpen} animationType="slide" presentationStyle="pageSheet">
         <SafeAreaView style={styles.pickerSafe}>
@@ -1207,5 +1264,64 @@ const styles = StyleSheet.create({
   },
   muted: {
     color: colors.muted,
+  },
+  zaloSendBtn: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 12,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+  },
+  zaloSendBtnText: {
+    color: colors.primary,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  bankCardActive: {
+    color: colors.muted,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  pickerLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  pickerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
+  pickerItemSelected: {
+    backgroundColor: colors.primarySoft,
+  },
+  pickerItemText: {
+    fontSize: 15,
+    color: colors.text,
+    flex: 1,
+  },
+  pickerItemMeta: {
+    fontSize: 13,
+    color: colors.muted,
+  },
+  sendBtn: {
+    backgroundColor: colors.primary,
+    padding: 14,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    marginTop: 20,
+    marginBottom: 40,
+  },
+  sendBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
   },
 });
