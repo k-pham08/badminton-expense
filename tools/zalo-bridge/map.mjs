@@ -1,5 +1,10 @@
+// Old format: "Thứ 3 10/11" or "Chủ nhật 10/11"
+// New format: "T3 - 10/11" or "CN 10/11"
 const DATE_TITLE =
   /(Chủ\s*nhật|Thứ\s*[2-7])\s+(\d{1,2})\s*\/\s*(\d{1,2})(?:\s*\/\s*(\d{2,4}))?(?:\s*\((\d+)\))?/i;
+
+const DATE_TITLE_NEW =
+  /(T[2-7]|CN)\s*[-–]\s*(\d{1,2})\s*\/\s*(\d{1,2})(?:\s*\/\s*(\d{2,4}))?/i;
 
 const ATTENDANCE =
   /^(đi|ko đi|không đi|không|vang|vắng|có|ok)$/i;
@@ -15,7 +20,41 @@ export function normalizeText(value) {
 }
 
 export function isDateTitle(value) {
-  return DATE_TITLE.test(String(value ?? '').trim());
+  const trimmed = String(value ?? '').trim();
+  return DATE_TITLE.test(trimmed) || DATE_TITLE_NEW.test(trimmed);
+}
+
+/** Extract date (DD/MM) from title using new format */
+function extractDateFromNewFormat(title, yearHint) {
+  const match = DATE_TITLE_NEW.exec(title);
+  if (!match) return null;
+  const day = Number(match[2]);
+  const month = Number(match[3]);
+  let year = yearHint;
+  if (match[4]) {
+    year = Number(match[4]);
+    if (year < 100) year += 2000;
+  }
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+}
+
+/** Extract date (DD/MM) from title */
+function extractDateFromTitle(title, yearHint) {
+  let match = DATE_TITLE.exec(title);
+  if (match) {
+    const day = Number(match[2]);
+    const month = Number(match[3]);
+    let year = yearHint;
+    if (match[4]) {
+      year = Number(match[4]);
+      if (year < 100) year += 2000;
+    }
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+  }
+  // Try new format
+  return extractDateFromNewFormat(title, yearHint);
 }
 
 export function chunks(items, size) {
