@@ -93,17 +93,26 @@ function phaseOf(error: unknown): Pick<ZaloSyncState, 'phase' | 'message'> {
 }
 
 export function nearestDateId(title: string, today = new Date()): string | null {
+  // Try current year first, then -1, +1
   const year = today.getFullYear();
-  const todayTime = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-  let best: { id: string; distance: number } | null = null;
-  for (const hint of [year - 1, year, year + 1]) {
-    const id = dateIdFromVoteTitle(title, hint);
-    if (!id) continue;
-    const [y, m, d] = id.split('-').map(Number);
-    const distance = Math.abs(new Date(y, m - 1, d).getTime() - todayTime);
-    if (!best || distance < best.distance) best = { id, distance };
-  }
-  return best?.id ?? null;
+  
+  // First try to parse with year explicitly in title (e.g., "01/11/2026")
+  const withExplicitYear = dateIdFromVoteTitle(title, year);
+  if (withExplicitYear) return withExplicitYear;
+  
+  // If no explicit year, try current year first
+  const currentYearId = dateIdFromVoteTitle(title, year);
+  if (currentYearId) return currentYearId;
+  
+  // Then try previous year
+  const prevYearId = dateIdFromVoteTitle(title, year - 1);
+  if (prevYearId) return prevYearId;
+  
+  // Then next year
+  const nextYearId = dateIdFromVoteTitle(title, year + 1);
+  if (nextYearId) return nextYearId;
+  
+  return null;
 }
 
 export type ZaloPollEntry = ZaloPollDay & { date: string };
@@ -112,7 +121,8 @@ export function entriesForPoll(poll: ZaloPoll, today = new Date()): ZaloPollEntr
   const byDate = new Map<string, ZaloPollEntry>();
   for (const day of poll.days) {
     const date = nearestDateId(day.title, today);
-    if (!date || day.names.length === 0) continue;
+    if (!date) continue;
+    // Include dates even if no voters yet
     const prev = byDate.get(date);
     if (!prev || day.names.length >= prev.names.length) {
       byDate.set(date, { ...day, date });
