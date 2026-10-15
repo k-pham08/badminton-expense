@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORKSPACE="$ROOT/ios/BadmintonApp.xcworkspace"
-SCHEME="Expo"
+SCHEME="BadmintonApp"
 BUNDLE_ID="com.khoapham.badminton-expense"
 TEAM="44GB59FSW2"
 APP="$HOME/Library/Developer/Xcode/DerivedData/BadmintonApp-gwkltqxbizvuxgdetugxtotdhvba/Build/Products/Release-iphoneos/BadmintonApp.app"
