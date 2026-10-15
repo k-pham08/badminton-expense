@@ -289,7 +289,66 @@ function groupIdOf(url) {
   return { id, kind: match[2] };
 }
 
+async function handleCreatePoll(client, body) {
+  const { groupId, question, options } = body;
+  if (!groupId || !question || !Array.isArray(options) || options.length < 2) {
+    throw new Error('Thiếu thông tin poll');
+  }
+  
+  const pollOptions = options.map(opt => String(opt).trim()).filter(opt => opt.length > 0);
+  if (pollOptions.length < 2) {
+    throw new Error('Cần ít nhất 2 ngày để tạo poll');
+  }
+  
+  // Limit options to 20
+  const limitedOptions = pollOptions.slice(0, 20);
+  if (pollOptions.length > 20) {
+    console.log(`Warning: ${pollOptions.length} options, using first 20`);
+  }
+  
+  console.log(`Creating poll "${question}" with ${limitedOptions.length} options`);
+  
+  try {
+    const result = await client.createPoll({
+      question: String(question).trim(),
+      options: limitedOptions,
+      allowAddNewOption: false,
+      isAnonymous: false,
+    }, groupId);
+    
+    return { ok: true, pollId: result?.pollId, message: 'Đã tạo poll thành công' };
+  } catch (error) {
+    console.log('Zalo API error:', error?.message || error);
+    throw error;
+  }
+}
+
 async function handle(req, res) {
+  const url = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
+  
+  // Handle POST /polls (create poll)
+  if (req.method === 'POST' && url.pathname === '/polls') {
+    if (!authorized(req.headers.authorization)) {
+      send(res, 401, { ok: false, error: 'Sai token' });
+      return;
+    }
+    const client = await liveApi();
+    if (!client) {
+      send(res, 401, { ok: false, needLogin: true, error: 'Cần quét QR trên Mac' });
+      return;
+    }
+    try {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      const result = await handleCreatePoll(client, body);
+      send(res, 200, result);
+    } catch (error) {
+      send(res, 400, { ok: false, error: error?.message || 'Lỗi tạo poll' });
+    }
+    return;
+  }
+  
   if (req.method !== 'GET') {
     send(res, 405, { ok: false, error: 'Chỉ hỗ trợ GET' });
     return;
@@ -298,7 +357,6 @@ async function handle(req, res) {
     send(res, 401, { ok: false, error: 'Sai token' });
     return;
   }
-  const url = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
   if (url.pathname === '/health') {
     const client = await liveApi();
     if (!client) {

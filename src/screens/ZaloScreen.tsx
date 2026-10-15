@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ZaloBar } from '../components/ZaloBar';
 import { Card, PrimaryButton, SectionTitle } from '../components/ui';
 import { useStore } from '../store';
 import { colors, radius, space } from '../theme';
-import { formatDateVi, monthLabel } from '../utils/date';
+import { daysInMonth, formatDateVi, monthLabel, parseMonthId, weekdayMon0FromDateId } from '../utils/date';
+import { createZaloPoll, fetchZaloGroups, loadZaloConfig, saveZaloGroup, type ZaloGroup } from '../utils/zaloBridge';
 
 function thisMonthId(): string {
   const now = new Date();
@@ -15,7 +16,7 @@ import type { Member, ZaloContact } from '../types';
 import type { ZaloPerson } from '../utils/vote';
 import { entriesForPoll, loadZalo, peopleForPoll, useZaloSyncState } from '../utils/zaloSync';
 
-type Tab = 'polls' | 'dates' | 'members' | 'apply';
+type Tab = 'polls' | 'dates' | 'members' | 'apply' | 'create';
 
 interface SelectedDate {
   date: string;
@@ -32,10 +33,156 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
   const [selectedDates, setSelectedDates] = useState<SelectedDate[]>([]);
   const [pickedPersonId, setPickedPersonId] = useState<string | null>(null);
   const [applyMonthId, setApplyMonthId] = useState(currentMonthId || thisMonthId());
+  
+  // Create poll state
+  const [createMonthId, setCreateMonthId] = useState(thisMonthId());
+  const [createSelectedDates, setCreateSelectedDates] = useState<string[]>([]);
+  const [createWeekdays, setCreateWeekdays] = useState<number[]>([]);
+  const [createLoading, setCreateLoading] = useState(false);
+  const [groups, setGroups] = useState<ZaloGroup[]>([]);
+  const [selectedGroupId, setSelectedGroupId] = useState<string>('');
+  const [showGroupPicker, setShowGroupPicker] = useState(false);
 
   useEffect(() => {
     void loadZalo(false);
   }, []);
+
+  // Load groups for create poll
+  const loadGroups = useCallback(async () => {
+    const config = await loadZaloConfig();
+    if (!config) {
+      Alert.alert('Lỗi', 'Chưa kết nối Zalo');
+      return;
+    }
+    try {
+      const groupList = await fetchZaloGroups(config.host, config.token);
+      setGroups(groupList);
+      if (groupList.length > 0 && !selectedGroupId) {
+        setSelectedGroupId(config.groupId || groupList[0].id);
+      }
+      setShowGroupPicker(true);
+    } catch (error) {
+      Alert.alert('Lỗi', error instanceof Error ? error.message : 'Không tải được nhóm');
+    }
+  }, [selectedGroupId]);
+
+  // Toggle weekday selection for create poll
+  const toggleCreateWeekday = useCallback((weekday: number) => {
+    setCreateWeekdays((prev) => {
+      if (prev.includes(weekday)) {
+        return prev.filter((d) => d !== weekday);
+      }
+      return [...prev, weekday].sort();
+    });
+  }, []);
+
+  // Select all weekdays in month
+  const selectAllCreateWeekdays = useCallback(() => {
+    setCreateWeekdays([0, 1, 2, 3, 4, 5, 6]);
+  }, []);
+
+  // Clear weekdays
+  const clearCreateWeekdays = useCallback(() => {
+    setCreateWeekdays([]);
+  }, []);
+
+  // Toggle date for create poll
+  const toggleCreateDate = useCallback((date: string) => {
+    setCreateSelectedDates((prev) => {
+      if (prev.includes(date)) {
+        return prev.filter((d) => d !== date);
+      }
+      return [...prev, date].sort();
+    });
+  }, []);
+
+  // Select all dates in month
+  const selectAllCreateDates = useCallback(() => {
+    const { year, month } = parseMonthId(createMonthId);
+    const total = daysInMonth(year, month);
+    const allDates: string[] = [];
+    for (let day = 1; day <= total; day++) {
+      allDates.push(`${createMonthId}-${String(day).padStart(2, '0')}`);
+    }
+    setCreateSelectedDates(allDates);
+  }, [createMonthId]);
+
+  // Clear dates
+  const clearCreateDates = useCallback(() => {
+    setCreateSelectedDates([]);
+  }, []);
+
+  // Get dates based on selected weekdays
+  const weekdayDates = useCallback((): string[] => {
+    const { year, month } = parseMonthId(createMonthId);
+    const total = daysInMonth(year, month);
+    const allDates: string[] = [];
+    for (let day = 1; day <= total; day++) {
+      allDates.push(`${createMonthId}-${String(day).padStart(2, '0')}`);
+    }
+    return allDates.filter((date: string) => createWeekdays.includes(weekdayMon0FromDateId(date)));
+  }, [createMonthId, createWeekdays]);
+
+  // All selected dates (from weekdays + manual)
+  const allCreateSelectedDates = useCallback((): string[] => {
+    const wdDates = weekdayDates();
+    const all = new Set([...wdDates, ...createSelectedDates]);
+    return [...all].sort();
+  }, [weekdayDates, createSelectedDates]);
+
+  // Format date for Zalo poll (T3 - 10/11)
+  const formatDateForPoll = useCallback((dateId: string): string => {
+    const [y, m, d] = dateId.split('-').map(Number);
+    const weekday = weekdayMon0FromDateId(dateId);
+    const weekdayLabels = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+    return `${weekdayLabels[weekday]} - ${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
+  }, []);
+
+  // Create poll
+  const handleCreatePoll = useCallback(async () => {
+    const dates = allCreateSelectedDates();
+    if (dates.length < 2) {
+      Alert.alert('Lỗi', 'Cần chọn ít nhất 2 ngày để tạo poll');
+      return;
+    }
+    
+    // Limit to 20 dates per poll (Zalo limit)
+    const maxDates = 20;
+    const limitedDates = dates.slice(0, maxDates);
+    if (dates.length > maxDates) {
+      Alert.alert('Giới hạn', `Zalo chỉ cho tối đa ${maxDates} ngày mỗi poll. Sẽ tạo poll với ${maxDates} ngày đầu tiên.`);
+    }
+
+    const config = await loadZaloConfig();
+    if (!config) {
+      Alert.alert('Lỗi', 'Chưa kết nối Zalo');
+      return;
+    }
+
+    const groupId = selectedGroupId || config.groupId;
+    const group = groups.find((g) => g.id === groupId);
+    if (group) {
+      await saveZaloGroup(groupId, group.name);
+    }
+
+    setCreateLoading(true);
+    try {
+      const options = limitedDates.map(formatDateForPoll);
+      const result = await createZaloPoll(config, 'Đánh cầu lông', options);
+      if (result.ok) {
+        Alert.alert('Thành công', `Đã tạo poll với ${limitedDates.length} ngày`);
+        // Reload polls
+        await loadZalo(true);
+        setTab('polls');
+      } else {
+        Alert.alert('Lỗi', result.error || 'Không tạo được poll');
+      }
+    } catch (error) {
+      Alert.alert('Lỗi', error instanceof Error ? error.message : 'Không tạo được poll');
+    } finally {
+      setCreateLoading(false);
+    }
+  }, [allCreateSelectedDates, formatDateForPoll, selectedGroupId, groups]);
 
   // Extract dates from selected polls
   const allDates = useCallback((): SelectedDate[] => {
@@ -265,6 +412,12 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
           onPress={() => setTab('apply')}
         >
           <Text style={[styles.tabText, tab === 'apply' && styles.tabTextActive]}>Áp dụng</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.tab, tab === 'create' && styles.tabActive]}
+          onPress={() => setTab('create')}
+        >
+          <Text style={[styles.tabText, tab === 'create' && styles.tabTextActive]}>+Tạo</Text>
         </Pressable>
       </View>
 
@@ -552,6 +705,175 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
               </Pressable>
             </View>
           </Card>
+        </>
+      )}
+
+      {/* Tab: Tạo poll */}
+      {tab === 'create' && (
+        <>
+          <Card>
+            <SectionTitle>Tạo poll mới</SectionTitle>
+            <Text style={styles.hint}>
+              Chọn tháng và các ngày đánh, sau đó tạo poll trong nhóm Zalo.
+            </Text>
+
+            {/* Month selector */}
+            <Text style={styles.label}>Tháng:</Text>
+            <View style={styles.monthInput}>
+              <TextInput
+                style={styles.textInput}
+                value={createMonthId}
+                onChangeText={setCreateMonthId}
+                placeholder="2025-10"
+                placeholderTextColor={colors.muted}
+              />
+              <Pressable
+                style={styles.monthBtn}
+                onPress={() => setCreateMonthId(thisMonthId())}
+              >
+                <Text style={styles.monthBtnText}>Tháng này</Text>
+              </Pressable>
+            </View>
+
+            {/* Weekday selector */}
+            <Text style={styles.label}>Chọn thứ (chọn tất cả = đánh mỗi tuần):</Text>
+            <View style={styles.weekdayRow}>
+              {['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map((label, index) => (
+                <Pressable
+                  key={index}
+                  style={[styles.weekdayBtn, createWeekdays.includes(index) && styles.weekdayBtnActive]}
+                  onPress={() => toggleCreateWeekday(index)}
+                >
+                  <Text style={[styles.weekdayBtnText, createWeekdays.includes(index) && styles.weekdayBtnTextActive]}>
+                    {label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.dateActions}>
+              <Pressable onPress={selectAllCreateWeekdays}>
+                <Text style={styles.link}>Chọn tất cả</Text>
+              </Pressable>
+              <Text style={styles.separator}> · </Text>
+              <Pressable onPress={clearCreateWeekdays}>
+                <Text style={styles.link}>Bỏ chọn</Text>
+              </Pressable>
+            </View>
+
+            {/* Extra dates */}
+            <Text style={styles.label}>Ngày thêm (ngoài lịch hàng tuần):</Text>
+            {(() => {
+              const { year, month } = parseMonthId(createMonthId);
+              const total = daysInMonth(year, month);
+              const allDates: string[] = [];
+              for (let day = 1; day <= total; day++) {
+                allDates.push(`${createMonthId}-${String(day).padStart(2, '0')}`);
+              }
+              return (
+                <View style={styles.datesGrid}>
+                  {allDates.map((dateId) => {
+                    const isFromWeekday = createWeekdays.includes(weekdayMon0FromDateId(dateId));
+                    const isSelected = createSelectedDates.includes(dateId);
+                    return (
+                      <Pressable
+                        key={dateId}
+                        style={[
+                          styles.dateCell,
+                          isFromWeekday && styles.dateCellWeekday,
+                          isSelected && styles.dateCellSelected,
+                        ]}
+                        onPress={() => toggleCreateDate(dateId)}
+                      >
+                        <Text style={[
+                          styles.dateCellText,
+                          isFromWeekday && styles.dateCellTextWeekday,
+                          isSelected && styles.dateCellTextSelected,
+                        ]}>
+                          {dateId.split('-')[2]}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              );
+            })()}
+
+            <View style={styles.dateActions}>
+              <Pressable onPress={selectAllCreateDates}>
+                <Text style={styles.link}>Chọn tất cả ngày</Text>
+              </Pressable>
+              <Text style={styles.separator}> · </Text>
+              <Pressable onPress={clearCreateDates}>
+                <Text style={styles.link}>Bỏ chọn</Text>
+              </Pressable>
+            </View>
+
+            {/* Summary */}
+            <View style={styles.pollSummary}>
+              <Text style={styles.pollSummaryText}>
+                {allCreateSelectedDates().length} ngày được chọn
+              </Text>
+              {allCreateSelectedDates().slice(0, 5).map((date) => (
+                <Text key={date} style={styles.pollSummaryItem}>
+                  • {formatDateForPoll(date)}
+                </Text>
+              ))}
+              {allCreateSelectedDates().length > 5 && (
+                <Text style={styles.pollSummaryMore}>
+                  ... và {allCreateSelectedDates().length - 5} ngày khác
+                </Text>
+              )}
+            </View>
+
+            {/* Create button */}
+            {createLoading ? (
+              <View style={styles.busy}>
+                <Text style={styles.busyText}>Đang tạo poll...</Text>
+              </View>
+            ) : (
+              <PrimaryButton
+                label={`Tạo poll với ${allCreateSelectedDates().length} ngày`}
+                onPress={handleCreatePoll}
+                disabled={allCreateSelectedDates().length < 2}
+              />
+            )}
+          </Card>
+
+          {/* Group selector */}
+          <Card>
+            <SectionTitle>Nhóm Zalo</SectionTitle>
+            <Pressable style={styles.groupSelector} onPress={() => void loadGroups()}>
+              <Text style={styles.groupSelectorText}>
+                {groups.find((g) => g.id === selectedGroupId)?.name || 'Chọn nhóm...'}
+              </Text>
+              <Text style={styles.groupSelectorIcon}>▼</Text>
+            </Pressable>
+          </Card>
+
+          {/* Group picker modal */}
+          <Modal visible={showGroupPicker} transparent animationType="slide">
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <Text style={styles.modalTitle}>Chọn nhóm Zalo</Text>
+                <ScrollView style={styles.groupList}>
+                  {groups.map((group) => (
+                    <Pressable
+                      key={group.id}
+                      style={[styles.groupItem, group.id === selectedGroupId && styles.groupItemSelected]}
+                      onPress={() => {
+                        setSelectedGroupId(group.id);
+                        setShowGroupPicker(false);
+                      }}
+                    >
+                      <Text style={styles.groupItemName}>{group.name}</Text>
+                      <Text style={styles.groupItemMembers}>{group.totalMember} thành viên</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+                <PrimaryButton label="Đóng" onPress={() => setShowGroupPicker(false)} />
+              </View>
+            </View>
+          </Modal>
         </>
       )}
     </ScrollView>
@@ -873,5 +1195,156 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontSize: 14,
     fontWeight: '600',
+  },
+
+  // Create poll tab
+  weekdayRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  weekdayBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: radius.sm,
+    marginHorizontal: 2,
+  },
+  weekdayBtnActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  weekdayBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.muted,
+  },
+  weekdayBtnTextActive: {
+    color: '#fff',
+  },
+  datesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 12,
+  },
+  dateCell: {
+    width: '14.28%',
+    aspectRatio: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.line,
+    marginBottom: -1,
+    marginRight: -1,
+  },
+  dateCellWeekday: {
+    backgroundColor: colors.bg,
+  },
+  dateCellSelected: {
+    backgroundColor: colors.primarySoft,
+    borderColor: colors.primary,
+  },
+  dateCellText: {
+    fontSize: 14,
+    color: colors.text,
+  },
+  dateCellTextWeekday: {
+    fontWeight: '600',
+  },
+  dateCellTextSelected: {
+    color: colors.primary,
+    fontWeight: '700',
+  },
+  pollSummary: {
+    backgroundColor: colors.card,
+    padding: 12,
+    borderRadius: radius.sm,
+    marginVertical: 12,
+  },
+  pollSummaryText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
+    marginBottom: 6,
+  },
+  pollSummaryItem: {
+    fontSize: 13,
+    color: colors.muted,
+    marginLeft: 8,
+  },
+  pollSummaryMore: {
+    fontSize: 12,
+    color: colors.muted,
+    fontStyle: 'italic',
+    marginTop: 4,
+    marginLeft: 8,
+  },
+  busy: {
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  busyText: {
+    color: colors.muted,
+    fontSize: 14,
+  },
+  groupSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 12,
+    backgroundColor: colors.card,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  groupSelectorText: {
+    fontSize: 15,
+    color: colors.text,
+  },
+  groupSelectorIcon: {
+    fontSize: 12,
+    color: colors.muted,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: colors.bg,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    padding: 20,
+    maxHeight: '70%',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 16,
+  },
+  groupList: {
+    maxHeight: 300,
+  },
+  groupItem: {
+    padding: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
+  groupItemSelected: {
+    backgroundColor: colors.primarySoft,
+  },
+  groupItemName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  groupItemMembers: {
+    fontSize: 13,
+    color: colors.muted,
+    marginTop: 2,
   },
 });

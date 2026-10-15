@@ -220,3 +220,52 @@ export async function fetchZaloBoard(config: ZaloConfig): Promise<{
   };
 }
 
+export type CreatePollResult = {
+  ok: boolean;
+  pollId?: string;
+  message?: string;
+  error?: string;
+};
+
+async function zaloPost<T>(host: string, token: string, path: string, body: object): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetch(`${normalizeHost(host)}${path}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token.trim()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const result = (await response.json().catch(() => null)) as T & { error?: string; needLogin?: boolean };
+    if (response.status === 401) {
+      if (result?.needLogin) throw new ZaloBridgeError('Cần quét QR trên Mac', 'needLogin');
+      throw new ZaloBridgeError('Sai token', 'unauthorized');
+    }
+    if (!response.ok) {
+      throw new ZaloBridgeError(result?.error || 'Mac không trả lời', 'bad');
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof ZaloBridgeError) throw error;
+    throw new ZaloBridgeError('Không tới được Mac', 'offline');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function createZaloPoll(
+  config: ZaloConfig,
+  question: string,
+  options: string[],
+): Promise<CreatePollResult> {
+  return zaloPost<CreatePollResult>(config.host, config.token, '/polls', {
+    groupId: config.groupId,
+    question,
+    options,
+  });
+}
+
