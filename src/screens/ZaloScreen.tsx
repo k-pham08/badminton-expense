@@ -42,6 +42,9 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
   const [groups, setGroups] = useState<ZaloGroup[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
   const [showGroupPicker, setShowGroupPicker] = useState(false);
+  
+  // Hidden polls state
+  const [hiddenPollIds, setHiddenPollIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     void loadZalo(false);
@@ -110,6 +113,19 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
   // Clear dates
   const clearCreateDates = useCallback(() => {
     setCreateSelectedDates([]);
+  }, []);
+
+  // Toggle hide poll
+  const toggleHidePoll = useCallback((pollId: string) => {
+    setHiddenPollIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(pollId)) {
+        next.delete(pollId);
+      } else {
+        next.add(pollId);
+      }
+      return next;
+    });
   }, []);
 
   // Get dates based on selected weekdays
@@ -432,13 +448,20 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
         <Card>
           <SectionTitle>Chọn phiếu ghim</SectionTitle>
           <Text style={styles.hint}>
-            Bấm phiếu để chọn/bỏ chọn. Chỉ hiện ngày từ phiếu đã chọn.
+            Bấm để chọn. Giữ để ẩn poll.
           </Text>
 
-          {sync.polls.length === 0 ? (
+          {sync.polls.filter(p => !hiddenPollIds.has(p.id)).length === 0 ? (
             <Text style={styles.empty}>
-              Chưa tải được phiếu.{'\n'}
-              Kết nối Zalo và tải lại.
+              Không có poll nào.{'\n'}
+              {hiddenPollIds.size > 0 && (
+                <Text>
+                  {' '}
+                  <Text style={styles.link} onPress={() => setHiddenPollIds(new Set())}>
+                    Hiện tất cả
+                  </Text>
+                </Text>
+              )}
             </Text>
           ) : (
             <>
@@ -450,9 +473,19 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
                 <Pressable onPress={clearPolls}>
                   <Text style={styles.link}>Bỏ chọn</Text>
                 </Pressable>
+                {hiddenPollIds.size > 0 && (
+                  <>
+                    <Text style={styles.separator}> · </Text>
+                    <Pressable onPress={() => setHiddenPollIds(new Set())}>
+                      <Text style={styles.link}>Hiện ẩn ({hiddenPollIds.size})</Text>
+                    </Pressable>
+                  </>
+                )}
               </View>
 
-              {sync.polls.map((poll) => {
+              {sync.polls
+                .filter(p => !hiddenPollIds.has(p.id))
+                .map((poll) => {
                 const isSelected = selectedPollIds.has(poll.id);
                 const entryCount = entriesForPoll(poll).length;
                 return (
@@ -460,6 +493,16 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
                     key={poll.id}
                     style={[styles.pollRow, isSelected && styles.pollRowSelected]}
                     onPress={() => togglePoll(poll.id)}
+                    onLongPress={() => {
+                      Alert.alert(
+                        poll.question,
+                        'Chọn thao tác:',
+                        [
+                          { text: 'Hủy', style: 'cancel' },
+                          { text: 'Ẩn poll này', style: 'destructive', onPress: () => toggleHidePoll(poll.id) },
+                        ]
+                      );
+                    }}
                   >
                     <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
                       {isSelected ? <Text style={styles.checkmark}>✓</Text> : null}
