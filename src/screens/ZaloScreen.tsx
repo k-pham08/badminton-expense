@@ -15,7 +15,7 @@ import type { Member, ZaloContact } from '../types';
 import type { ZaloPerson } from '../utils/vote';
 import { entriesForPoll, loadZalo, peopleForPoll, useZaloSyncState } from '../utils/zaloSync';
 
-type Tab = 'dates' | 'members' | 'apply';
+type Tab = 'polls' | 'dates' | 'members' | 'apply';
 
 interface SelectedDate {
   date: string;
@@ -27,7 +27,8 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
   const store = useStore();
   const sync = useZaloSyncState();
 
-  const [tab, setTab] = useState<Tab>('dates');
+  const [tab, setTab] = useState<Tab>('polls');
+  const [selectedPollIds, setSelectedPollIds] = useState<Set<string>>(new Set());
   const [selectedDates, setSelectedDates] = useState<SelectedDate[]>([]);
   const [pickedPersonId, setPickedPersonId] = useState<string | null>(null);
   const [applyMonthId, setApplyMonthId] = useState(currentMonthId || thisMonthId());
@@ -36,13 +37,19 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
     void loadZalo(false);
   }, []);
 
-  // Extract all dates from all pinned polls (no date filtering)
+  // Extract dates from selected polls
   const allDates = useCallback((): SelectedDate[] => {
     const dateMap = new Map<string, SelectedDate>();
 
+    // If no polls selected, return empty
+    if (selectedPollIds.size === 0) return [];
+
     for (const poll of sync.polls) {
       if (poll.anonymous) continue;
-      const entries = entriesForPoll(poll); // Get ALL dates from poll, no filtering
+      // Only include selected polls
+      if (!selectedPollIds.has(poll.id)) continue;
+      
+      const entries = entriesForPoll(poll);
       for (const entry of entries) {
         const existing = dateMap.get(entry.date);
         const allPeople = [...(existing?.people ?? []), ...(entry.voterIds ?? [])];
@@ -55,7 +62,34 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
     }
 
     return [...dateMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+  }, [sync.polls, selectedPollIds]);
+
+  // Toggle poll selection
+  const togglePoll = useCallback((pollId: string) => {
+    setSelectedPollIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(pollId)) {
+        next.delete(pollId);
+      } else {
+        next.add(pollId);
+      }
+      return next;
+    });
+    // Clear selected dates when polls change
+    setSelectedDates([]);
+  }, []);
+
+  // Select all polls
+  const selectAllPolls = useCallback(() => {
+    setSelectedPollIds(new Set(sync.polls.filter(p => !p.anonymous).map(p => p.id)));
+    setSelectedDates([]);
   }, [sync.polls]);
+
+  // Clear poll selection
+  const clearPolls = useCallback(() => {
+    setSelectedPollIds(new Set());
+    setSelectedDates([]);
+  }, []);
 
   const toggleDate = useCallback((date: string) => {
     setSelectedDates((prev) => {
@@ -199,10 +233,26 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
       {/* Tab buttons */}
       <View style={styles.tabBar}>
         <Pressable
+          style={[styles.tab, tab === 'polls' && styles.tabActive]}
+          onPress={() => setTab('polls')}
+        >
+          <Text style={[styles.tabText, tab === 'polls' && styles.tabTextActive]}>Phiếu</Text>
+          {selectedPollIds.size > 0 && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{selectedPollIds.size}</Text>
+            </View>
+          )}
+        </Pressable>
+        <Pressable
           style={[styles.tab, tab === 'dates' && styles.tabActive]}
           onPress={() => setTab('dates')}
         >
-          <Text style={[styles.tabText, tab === 'dates' && styles.tabTextActive]}>Ngày đánh</Text>
+          <Text style={[styles.tabText, tab === 'dates' && styles.tabTextActive]}>Ngày</Text>
+          {selectedDates.length > 0 && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{selectedDates.length}</Text>
+            </View>
+          )}
         </Pressable>
         <Pressable
           style={[styles.tab, tab === 'members' && styles.tabActive]}
@@ -215,28 +265,86 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
           onPress={() => setTab('apply')}
         >
           <Text style={[styles.tabText, tab === 'apply' && styles.tabTextActive]}>Áp dụng</Text>
-          {selectedDates.length > 0 && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{selectedDates.length}</Text>
-            </View>
-          )}
         </Pressable>
       </View>
 
       <ZaloBar />
 
-      {/* Tab: Ngày đánh */}
-      {tab === 'dates' && (
+      {/* Tab: Phiếu */}
+      {tab === 'polls' && (
         <Card>
-          <SectionTitle>Ngày từ phiếu Zalo</SectionTitle>
+          <SectionTitle>Chọn phiếu ghim</SectionTitle>
           <Text style={styles.hint}>
-            Chọn ngày muốn thêm vào lịch. Chỉ hiện ngày trong tương lai từ các phiếu đã ghim.
+            Bấm phiếu để chọn/bỏ chọn. Chỉ hiện ngày từ phiếu đã chọn.
           </Text>
 
           {sync.polls.length === 0 ? (
-            <Text style={styles.empty}>Chưa tải được phiếu. Kiểm tra kết nối Zalo.</Text>
+            <Text style={styles.empty}>
+              Chưa tải được phiếu.{'\n'}
+              Kết nối Zalo và tải lại.
+            </Text>
+          ) : (
+            <>
+              <View style={styles.dateActions}>
+                <Pressable onPress={selectAllPolls}>
+                  <Text style={styles.link}>Chọn tất cả</Text>
+                </Pressable>
+                <Text style={styles.separator}> · </Text>
+                <Pressable onPress={clearPolls}>
+                  <Text style={styles.link}>Bỏ chọn</Text>
+                </Pressable>
+              </View>
+
+              {sync.polls.map((poll) => {
+                const isSelected = selectedPollIds.has(poll.id);
+                const entryCount = entriesForPoll(poll).length;
+                return (
+                  <Pressable
+                    key={poll.id}
+                    style={[styles.pollRow, isSelected && styles.pollRowSelected]}
+                    onPress={() => togglePoll(poll.id)}
+                  >
+                    <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+                      {isSelected ? <Text style={styles.checkmark}>✓</Text> : null}
+                    </View>
+                    <View style={styles.pollInfo}>
+                      <Text style={styles.pollTitle}>{poll.question}</Text>
+                      <Text style={styles.meta}>
+                        {entryCount} ngày{poll.anonymous ? ' · Ẩn danh' : ''}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+
+              {selectedPollIds.size > 0 && (
+                <Pressable
+                  style={styles.nextBtn}
+                  onPress={() => setTab('dates')}
+                >
+                  <Text style={styles.nextBtnText}>
+                    Xem ngày ({selectedPollIds.size} phiếu) →
+                  </Text>
+                </Pressable>
+              )}
+            </>
+          )}
+        </Card>
+      )}
+
+      {/* Tab: Ngày đánh */}
+      {tab === 'dates' && (
+        <Card>
+          <SectionTitle>Chọn ngày</SectionTitle>
+          <Text style={styles.hint}>
+            Chọn ngày muốn thêm vào lịch. Chưa chọn phiếu?{' '}
+            <Text style={styles.link} onPress={() => setTab('polls')}>Quay lại tab Phiếu</Text>
+          </Text>
+
+          {selectedPollIds.size === 0 ? (
+            <Text style={styles.empty}>Chưa chọn phiếu nào.{'\n'}Bấm tab Phiếu để chọn.</Text>
           ) : dates.length === 0 ? (
-            <Text style={styles.empty}>Không có ngày nào trong các phiếu.</Text>
+            <Text style={styles.empty}>Không có ngày nào trong các phiếu đã chọn.</Text>
           ) : (
             <>
               <View style={styles.dateActions}>
@@ -531,6 +639,41 @@ const styles = StyleSheet.create({
   dateActions: {
     flexDirection: 'row',
     marginBottom: 12,
+  },
+
+  // Poll selection
+  pollRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.line,
+  },
+  pollRowSelected: {
+    backgroundColor: colors.primarySoft,
+    marginHorizontal: -8,
+    paddingHorizontal: 8,
+    borderRadius: radius.sm,
+  },
+  pollInfo: {
+    flex: 1,
+  },
+  pollTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  nextBtn: {
+    marginTop: 16,
+    backgroundColor: colors.primary,
+    paddingVertical: 12,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+  },
+  nextBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
   },
   separator: {
     color: colors.muted,
