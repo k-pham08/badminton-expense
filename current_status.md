@@ -36,6 +36,7 @@
 - [x] Per-member attendance & payment
 - [x] Zalo vote import
 - [x] Local backup/restore
+- [x] Auto-backup on data change
 - [x] iOS build
 - [x] Android build
 
