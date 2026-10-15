@@ -134,7 +134,8 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
   const formatDateForPoll = useCallback((dateId: string): string => {
     const [y, m, d] = dateId.split('-').map(Number);
     const weekday = weekdayMon0FromDateId(dateId);
-    const weekdayLabels = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+    // 0=Mon=T2, 1=Tue=T3, 2=Wed=T4, 3=Thu=T5, 4=Fri=T6, 5=Sat=T7, 6=Sun=CN
+    const weekdayLabels = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
     return `${weekdayLabels[weekday]} - ${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
   }, []);
 
@@ -168,7 +169,10 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
     setCreateLoading(true);
     try {
       const options = limitedDates.map(formatDateForPoll);
-      const result = await createZaloPoll(config, 'Đánh cầu lông', options);
+      // Poll title: "Vote 12 - 2026"
+      const { year, month } = parseMonthId(createMonthId);
+      const pollTitle = `Vote ${month} - ${year}`;
+      const result = await createZaloPoll(config, pollTitle, options);
       if (result.ok) {
         Alert.alert('Thành công', `Đã tạo poll với ${limitedDates.length} ngày`);
         // Reload polls
@@ -182,7 +186,7 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
     } finally {
       setCreateLoading(false);
     }
-  }, [allCreateSelectedDates, formatDateForPoll, selectedGroupId, groups]);
+  }, [allCreateSelectedDates, formatDateForPoll, selectedGroupId, groups, createMonthId]);
 
   // Extract dates from selected polls
   const allDates = useCallback((): SelectedDate[] => {
