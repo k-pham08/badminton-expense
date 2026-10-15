@@ -765,13 +765,13 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
             <Text style={styles.label}>Chọn thứ (chọn tất cả = đánh mỗi tuần):</Text>
             <View style={styles.weekdayRow}>
               {[
-                { label: 'T2', day: 0 },  // Monday
-                { label: 'T3', day: 1 },  // Tuesday
-                { label: 'T4', day: 2 },  // Wednesday
-                { label: 'T5', day: 3 },  // Thursday
-                { label: 'T6', day: 4 },  // Friday
-                { label: 'T7', day: 5 },  // Saturday
-                { label: 'CN', day: 6 },  // Sunday
+                { label: 'T2', day: 0 },
+                { label: 'T3', day: 1 },
+                { label: 'T4', day: 2 },
+                { label: 'T5', day: 3 },
+                { label: 'T6', day: 4 },
+                { label: 'T7', day: 5 },
+                { label: 'CN', day: 6 },
               ].map(({ label, day }) => (
                 <Pressable
                   key={day}
@@ -784,6 +784,62 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
                 </Pressable>
               ))}
             </View>
+
+            {/* Weekday header row for dates */}
+            <View style={styles.weekdayRow}>
+              {['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map((label) => (
+                <View key={label} style={styles.weekdayHeader}>
+                  <Text style={styles.weekdayHeaderText}>{label}</Text>
+                </View>
+              ))}
+            </View>
+
+            {/* Dates grid - aligned with weekday headers */}
+            {(() => {
+              const { year, month } = parseMonthId(createMonthId);
+              const total = daysInMonth(year, month);
+              const firstDate = `${createMonthId}-01`;
+              const firstWeekday = weekdayMon0FromDateId(firstDate);
+              const allDates: (string | null)[] = [];
+              // Add empty cells for days before the 1st
+              for (let i = 0; i < firstWeekday; i++) {
+                allDates.push(null);
+              }
+              // Add all days
+              for (let day = 1; day <= total; day++) {
+                allDates.push(`${createMonthId}-${String(day).padStart(2, '0')}`);
+              }
+              return (
+                <View style={styles.datesGrid}>
+                  {allDates.map((dateId, index) => {
+                    if (!dateId) {
+                      return <View key={`empty-${index}`} style={styles.dateCell} />;
+                    }
+                    const isFromWeekday = createWeekdays.includes(weekdayMon0FromDateId(dateId));
+                    const isSelected = createSelectedDates.includes(dateId);
+                    return (
+                      <Pressable
+                        key={dateId}
+                        style={[
+                          styles.dateCell,
+                          isFromWeekday && styles.dateCellWeekday,
+                          isSelected && styles.dateCellSelected,
+                        ]}
+                        onPress={() => toggleCreateDate(dateId)}
+                      >
+                        <Text style={[
+                          styles.dateCellText,
+                          isFromWeekday && styles.dateCellTextWeekday,
+                          isSelected && styles.dateCellTextSelected,
+                        ]}>
+                          {dateId.split('-')[2]}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              );
+            })()}
             <View style={styles.dateActions}>
               <Pressable onPress={selectAllCreateWeekdays}>
                 <Text style={styles.link}>Chọn tất cả</Text>
@@ -831,6 +887,11 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
                 </View>
               );
             })()}
+
+            {/* Extra dates - manual selection info */}
+            <Text style={styles.hint}>
+              Ngày nền xanh đậm = theo lịch hàng tuần. Bấm để chọn thêm.
+            </Text>
 
             <View style={styles.dateActions}>
               <Pressable onPress={selectAllCreateDates}>
@@ -1289,6 +1350,16 @@ const styles = StyleSheet.create({
   },
   weekdayBtnTextActive: {
     color: '#fff',
+  },
+  weekdayHeader: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  weekdayHeaderText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.muted,
   },
   datesGrid: {
     flexDirection: 'row',
