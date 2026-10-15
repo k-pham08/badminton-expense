@@ -166,21 +166,44 @@ export type ZaloVoteDay = {
   anonymous?: boolean;
 };
 
+// Old format: "Thứ 3 10/11" or "Chủ nhật 10/11"
+// New format: "T3 - 10/11" or "CN 10/11"
 const TITLE_DATE =
   /(Chủ\s*nhật|Thứ\s*[2-7])\s+(\d{1,2})\s*\/\s*(\d{1,2})(?:\s*\/\s*(\d{2,4}))?(?:\s*\((\d+)\))?/i;
 
+const TITLE_DATE_NEW =
+  /(T[2-7]|CN)\s*[-–]\s*(\d{1,2})\s*\/\s*(\d{1,2})(?:\s*\/\s*(\d{2,4}))?/i;
+
 export function dateIdFromVoteTitle(title: string, yearHint: number): string | null {
-  const match = TITLE_DATE.exec(title);
-  if (!match) return null;
-  const day = Number(match[2]);
-  const month = Number(match[3]);
-  let year = yearHint;
-  if (match[4]) {
-    year = Number(match[4]);
-    if (year < 100) year += 2000;
+  // Try old format first: "Thứ 3 10/11"
+  let match = TITLE_DATE.exec(title);
+  if (match) {
+    const day = Number(match[2]);
+    const month = Number(match[3]);
+    let year = yearHint;
+    if (match[4]) {
+      year = Number(match[4]);
+      if (year < 100) year += 2000;
+    }
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   }
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+  // Try new format: "T3 - 10/11" or "CN 10/11"
+  match = TITLE_DATE_NEW.exec(title);
+  if (match) {
+    const day = Number(match[2]);
+    const month = Number(match[3]);
+    let year = yearHint;
+    if (match[4]) {
+      year = Number(match[4]);
+      if (year < 100) year += 2000;
+    }
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  return null;
 }
 
 /** Mỗi `.detail-section-wrapper` là một ngày vote. */
