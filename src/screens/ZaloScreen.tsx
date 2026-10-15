@@ -719,14 +719,36 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
 
             {/* Month selector */}
             <Text style={styles.label}>Tháng:</Text>
-            <View style={styles.monthInput}>
+            <View style={styles.monthPickerRow}>
+              <Pressable
+                style={styles.monthArrowBtn}
+                onPress={() => {
+                  const { year, month } = parseMonthId(createMonthId);
+                  const newMonth = month === 1 ? 12 : month - 1;
+                  const newYear = month === 1 ? year - 1 : year;
+                  setCreateMonthId(`${newYear}-${String(newMonth).padStart(2, '0')}`);
+                }}
+              >
+                <Text style={styles.monthArrowText}>◀</Text>
+              </Pressable>
               <TextInput
-                style={styles.textInput}
+                style={styles.monthInputField}
                 value={createMonthId}
                 onChangeText={setCreateMonthId}
                 placeholder="2025-10"
                 placeholderTextColor={colors.muted}
               />
+              <Pressable
+                style={styles.monthArrowBtn}
+                onPress={() => {
+                  const { year, month } = parseMonthId(createMonthId);
+                  const newMonth = month === 12 ? 1 : month + 1;
+                  const newYear = month === 12 ? year + 1 : year;
+                  setCreateMonthId(`${newYear}-${String(newMonth).padStart(2, '0')}`);
+                }}
+              >
+                <Text style={styles.monthArrowText}>▶</Text>
+              </Pressable>
               <Pressable
                 style={styles.monthBtn}
                 onPress={() => setCreateMonthId(thisMonthId())}
@@ -1198,6 +1220,38 @@ const styles = StyleSheet.create({
   },
 
   // Create poll tab
+  monthPickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 16,
+  },
+  monthArrowBtn: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.card,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  monthArrowText: {
+    fontSize: 16,
+    color: colors.primary,
+  },
+  monthInputField: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: radius.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.text,
+    textAlign: 'center',
+  },
   weekdayRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
