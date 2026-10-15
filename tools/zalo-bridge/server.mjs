@@ -323,6 +323,37 @@ async function handleCreatePoll(client, body) {
   }
 }
 
+async function handleSendMessage(client, body) {
+  const { groupId, message, imageBase64 } = body;
+  if (!groupId) {
+    throw new Error('Thiếu groupId');
+  }
+  
+  console.log(`Sending message to group ${groupId}`);
+  
+  try {
+    const msgContent = {
+      msg: String(message || '').trim(),
+    };
+    
+    // Add image if provided (base64)
+    if (imageBase64) {
+      // Zalo API expects image as attachment
+      msgContent.attachments = {
+        type: 'image',
+        data: Buffer.from(imageBase64, 'base64'),
+      };
+    }
+    
+    const result = await client.sendMessage(msgContent, groupId, 'group');
+    
+    return { ok: true, message: 'Đã gửi tin nhắn', msgId: result?.message?.msgId };
+  } catch (error) {
+    console.log('Send message error:', error?.message || error);
+    throw error;
+  }
+}
+
 async function handle(req, res) {
   const url = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
   
@@ -345,6 +376,29 @@ async function handle(req, res) {
       send(res, 200, result);
     } catch (error) {
       send(res, 400, { ok: false, error: error?.message || 'Lỗi tạo poll' });
+    }
+    return;
+  }
+  
+  // Handle POST /send (send message to group)
+  if (req.method === 'POST' && url.pathname === '/send') {
+    if (!authorized(req.headers.authorization)) {
+      send(res, 401, { ok: false, error: 'Sai token' });
+      return;
+    }
+    const client = await liveApi();
+    if (!client) {
+      send(res, 401, { ok: false, needLogin: true, error: 'Cần quét QR trên Mac' });
+      return;
+    }
+    try {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      const result = await handleSendMessage(client, body);
+      send(res, 200, result);
+    } catch (error) {
+      send(res, 400, { ok: false, error: error?.message || 'Lỗi gửi tin nhắn' });
     }
     return;
   }

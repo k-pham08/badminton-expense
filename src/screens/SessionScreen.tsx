@@ -38,6 +38,7 @@ import {
 import { formatDateVi, WEEKDAY_LONG, weekdayMon0FromDateId } from '../utils/date';
 import { formatVnd } from '../utils/money';
 import { hoursBetween } from '../utils/time';
+import { loadZaloConfig, sendZaloMessage } from '../utils/zaloBridge';
 
 function newExtraId(): string {
   return `e_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -97,6 +98,7 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
   const [newMemberName, setNewMemberName] = useState('');
   const [courtPickerOpen, setCourtPickerOpen] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
+  const [sendZaloLoading, setSendZaloLoading] = useState(false);
 
   const shuttlePrice = month.shuttlePrice;
   const shuttleName = (month.shuttleName ?? '').trim();
@@ -642,6 +644,83 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
           }}
         />
 
+        {/* Send to Zalo button */}
+        <View style={{ height: 10 }} />
+        {sendZaloLoading ? (
+          <View style={styles.busy}>
+            <Text style={styles.muted}>Đang gửi...</Text>
+          </View>
+        ) : (
+          <SecondaryButton
+            label="📤 Gửi vào nhóm Zalo"
+            onPress={async () => {
+              const config = await loadZaloConfig();
+              if (!config) {
+                Alert.alert('Chưa kết nối Zalo', 'Vào tab Zalo để kết nối Mac.');
+                return;
+              }
+              setSendZaloLoading(true);
+              try {
+                // Build message
+                const dateLabel = formatDateVi(date);
+                const lines: string[] = [];
+                lines.push(`📊 ${dateLabel}`);
+                lines.push('─'.repeat(20));
+                
+                // Court fees
+                const courtGroups = groupUsagesBySlot(usages.filter(u => usageHours(u) > 0 && u.pricePerHour > 0));
+                if (courtGroups.length > 0) {
+                  let totalCourt = 0;
+                  for (const slot of courtGroups) {
+                    totalCourt += slot.fee;
+                  }
+                  lines.push(`🏸 Sân: ${formatVnd(totalCourt)}`);
+                }
+                
+                // Shuttle
+                const totalShuttle = monthlyShuttle + extraShuttleFee(extras);
+                if (totalShuttle > 0) {
+                  lines.push(`🏸 Cầu: ${formatVnd(totalShuttle)}`);
+                }
+                
+                lines.push('─'.repeat(20));
+                lines.push(`💰 Tổng: ${formatVnd(split.total)}`);
+                
+                // Per person
+                if (split.uneven) {
+                  lines.push('📋 Chia theo giờ:');
+                  const attendeeMembers = members.filter(m => attendeeIds.includes(m.id));
+                  for (const member of attendeeMembers) {
+                    const hours = split.hoursByMemberId[member.id] ?? 0;
+                    const amount = split.byMemberId[member.id] ?? 0;
+                    lines.push(`• ${member.name}: ${formatVnd(amount)} (${formatHours(hours)}h)`);
+                  }
+                } else if (people > 0) {
+                  lines.push(`👥 ${people} người × ${formatVnd(share)}/người`);
+                }
+                
+                // Bank info placeholder
+                lines.push('─'.repeat(20));
+                lines.push('🏦 TK: [Nhập số TK]');
+                lines.push('📌 CTK: [Nhập tên]');
+                lines.push('🌊 Ngân hàng: [Nhập NH]');
+                
+                const message = lines.join('\n');
+                const result = await sendZaloMessage(config, message);
+                if (result.ok) {
+                  Alert.alert('Đã gửi', 'Tin nhắn đã gửi vào nhóm Zalo.');
+                } else {
+                  Alert.alert('Lỗi', result.error || 'Không gửi được');
+                }
+              } catch (error) {
+                Alert.alert('Lỗi', error instanceof Error ? error.message : 'Không gửi được');
+              } finally {
+                setSendZaloLoading(false);
+              }
+            }}
+          />
+        )}
+
       </ScrollView>
 
       <DayBrief
@@ -1120,5 +1199,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.muted,
     marginTop: 2,
+  },
+  busy: {
+    padding: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  muted: {
+    color: colors.muted,
   },
 });

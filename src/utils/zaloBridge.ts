@@ -269,3 +269,22 @@ export async function createZaloPoll(
   });
 }
 
+export type SendMessageResult = {
+  ok: boolean;
+  message?: string;
+  msgId?: number;
+  error?: string;
+};
+
+export async function sendZaloMessage(
+  config: ZaloConfig,
+  message: string,
+  imageBase64?: string,
+): Promise<SendMessageResult> {
+  return zaloPost<SendMessageResult>(config.host, config.token, '/send', {
+    groupId: config.groupId,
+    message,
+    imageBase64,
+  });
+}
+
