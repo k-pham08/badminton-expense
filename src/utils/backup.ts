@@ -1,4 +1,9 @@
+import { documentDirectory, cacheDirectory, EncodingType, getInfoAsync, readAsStringAsync, writeAsStringAsync } from 'expo-file-system/legacy';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { EMPTY_DATA, type AppData } from '../types';
+
+const AUTO_BACKUP_FILE = 'auto-backup.json';
+const AUTO_BACKUP_KEY = 'auto-backup-timestamp';
 
 export type BackupFile = AppData & {
   exportedAt?: string;
@@ -53,4 +58,70 @@ export function parseBackup(raw: string): AppData {
     courts: value.courts ?? [],
     months: value.months,
   };
+}
+
+// ============ Auto-backup functions ============
+
+function getAutoBackupDir(): string {
+  return documentDirectory ?? cacheDirectory ?? '';
+}
+
+export async function saveAutoBackup(data: AppData): Promise<void> {
+  try {
+    const dir = getAutoBackupDir();
+    if (!dir) return;
+    
+    const json = toBackupJson(data);
+    const path = `${dir}${AUTO_BACKUP_FILE}`;
+    await writeAsStringAsync(path, json, { encoding: EncodingType.UTF8 });
+    
+    // Also save timestamp to AsyncStorage for quick access
+    await AsyncStorage.setItem(AUTO_BACKUP_KEY, new Date().toISOString());
+  } catch (error) {
+    console.warn('Auto-backup failed:', error);
+  }
+}
+
+export async function loadAutoBackup(): Promise<{ data: AppData | null; timestamp: string | null }> {
+  try {
+    const dir = getAutoBackupDir();
+    if (!dir) return { data: null, timestamp: null };
+
+    const path = `${dir}${AUTO_BACKUP_FILE}`;
+    const info = await getInfoAsync(path);
+    if (!info.exists) return { data: null, timestamp: null };
+
+    const json = await readAsStringAsync(path, { encoding: EncodingType.UTF8 });
+    const data = parseBackup(json);
+
+    const timestamp = await AsyncStorage.getItem(AUTO_BACKUP_KEY);
+
+    return { data, timestamp };
+  } catch (error) {
+    console.warn('Load auto-backup failed:', error);
+    return { data: null, timestamp: null };
+  }
+}
+
+export function formatBackupTime(isoString: string | null): string {
+  if (!isoString) return 'Chưa có backup tự động';
+  const date = new Date(isoString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return 'Vừa xong';
+  if (diffMins < 60) return `${diffMins} phút trước`;
+  if (diffHours < 24) return `${diffHours} giờ trước`;
+  if (diffDays < 7) return `${diffDays} ngày trước`;
+  
+  return date.toLocaleDateString('vi-VN', { 
+    day: '2-digit', 
+    month: '2-digit', 
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
 }
