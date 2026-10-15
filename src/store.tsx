@@ -94,6 +94,7 @@ type Store = {
     entries: { date: string; names: string[]; voterIds?: string[] }[],
   ) => void;
   applyLinkedZaloVote: (monthId: string, days: { date: string; memberIds: string[] }[]) => void;
+  applySessionToMonth: (monthId: string, date: string, attendeeIds: string[]) => void;
 };
 
 const StoreContext = createContext<Store | null>(null);
@@ -1104,6 +1105,43 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const applySessionToMonth = useCallback((monthId: string, date: string, attendeeIds: string[]) => {
+    setData((prev) =>
+      withMonth(prev, monthId, (m) => {
+        const existing = m.sessions[date];
+        // Keep existing data if session has money, only update attendees
+        const session: Session = existing
+          ? {
+              ...existing,
+              attendeeIds,
+              attendeeCount: attendeeIds.length,
+              // Keep manual additions by keeping existing attendees not in the new list
+              // But this is simpler: just use the new attendeeIds
+            }
+          : {
+              date,
+              courtFee: 0,
+              courts: [],
+              shuttleCount: 0,
+              extraShuttles: [],
+              attendeeIds,
+              attendeeCount: attendeeIds.length,
+              paidIds: [],
+              saved: false,
+            };
+
+        // If date is not in playingDates, add it
+        const playingDates = m.playingDates.includes(date) ? m.playingDates : [...m.playingDates, date].sort();
+
+        return {
+          ...m,
+          sessions: { ...m.sessions, [date]: session },
+          playingDates,
+        };
+      }),
+    );
+  }, []);
+
   const setSessionPaidIds = useCallback((monthId: string, date: string, paidIds: string[]) => {
     setData((prev) =>
       withMonth(prev, monthId, (m) => {
@@ -1185,6 +1223,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       applyMonthVote,
       syncVoteAttendees,
       applySessionToWeekday,
+      applySessionToMonth,
       setSessionPaidIds,
       setMemberMonthPaid,
       importData,
@@ -1225,6 +1264,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       applyMonthVote,
       syncVoteAttendees,
       applySessionToWeekday,
+      applySessionToMonth,
       setSessionPaidIds,
       setMemberMonthPaid,
       importData,
