@@ -12,6 +12,7 @@ function thisMonthId(): string {
 }
 import type { ZaloBridgePerson, ZaloPoll } from '../utils/zaloBridge';
 import type { Member, ZaloContact } from '../types';
+import type { ZaloPerson } from '../utils/vote';
 import { entriesForPoll, loadZalo, peopleForPoll, upcomingPollEntries, useZaloSyncState } from '../utils/zaloSync';
 
 type Tab = 'dates' | 'members' | 'apply';
@@ -139,13 +140,29 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
   }, [contacts, members]);
 
   // Handle link a Zalo person to a member
-  const handleLinkToMember = useCallback((personId: string, memberId: string) => {
-    store.linkZaloContact(personId, memberId);
+  const handleLinkToMember = useCallback((person: ZaloBridgePerson, memberId: string) => {
+    // First, ensure person exists in zaloContacts using importZaloPeople
+    const zaloPerson: ZaloPerson = {
+      id: person.id,
+      name: person.name,
+      avatar: person.avatar ?? '',
+    };
+    store.importZaloPeople([zaloPerson]);
+    // Now link the contact to member
+    store.linkZaloContact(person.id, memberId);
     setPickedPersonId(null);
   }, [store]);
 
   // Handle create member from Zalo person
   const handleCreateMember = useCallback((person: ZaloBridgePerson) => {
+    // First, ensure person exists in zaloContacts
+    const zaloPerson: ZaloPerson = {
+      id: person.id,
+      name: person.name,
+      avatar: person.avatar ?? '',
+    };
+    store.importZaloPeople([zaloPerson]);
+    // Then create member and link
     const newId = store.addMember(person.name);
     if (newId) {
       store.linkZaloContact(person.id, newId);
@@ -335,7 +352,7 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
                           <Pressable
                             key={m.id}
                             style={styles.memberChoice}
-                            onPress={() => handleLinkToMember(person.id, m.id)}
+                            onPress={() => handleLinkToMember(person, m.id)}
                           >
                             <Text style={styles.memberChoiceText}>{m.name}</Text>
                             {m.id === member?.id && (

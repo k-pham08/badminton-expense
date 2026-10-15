@@ -2,14 +2,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORKSPACE="$ROOT/ios/BadmintonApp.xcworkspace"
-SCHEME="BadmintonApp"
+WORKSPACE="$ROOT/ios/Badminton.xcworkspace"
+SCHEME="Badminton"
 BUNDLE_ID="com.khoapham.badminton-expense"
 TEAM="44GB59FSW2"
-APP="$HOME/Library/Developer/Xcode/DerivedData/BadmintonApp-gwkltqxbizvuxgdetugxtotdhvba/Build/Products/Release-iphoneos/BadmintonApp.app"
+APP="$HOME/Library/Developer/Xcode/DerivedData/BadmintonApp-gwkltqxbizvuxgdetugxtotdhvba/Build/Products/Release-iphoneos/Badminton.app"
 
 if [[ ! -d "$WORKSPACE" ]]; then
-  echo "ios/BadmintonApp.xcworkspace not found. Run: npx expo prebuild --platform ios"
+  echo "ios/Badminton.xcworkspace not found. Run: npx expo prebuild --platform ios"
   exit 1
 fi
 
@@ -39,11 +39,11 @@ xcodebuild \
   CODE_SIGN_STYLE=Automatic
 
 if [[ ! -d "$APP" ]]; then
-  APP="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*/Release-iphoneos/BadmintonApp.app' -type d | head -n 1)"
+  APP="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*/Release-iphoneos/Badminton.app' -type d | head -n 1)"
 fi
 
 if [[ -z "${APP:-}" || ! -d "$APP" ]]; then
-  echo "BadmintonApp.app not found after build."
+  echo "Badminton.app not found after build."
   exit 1
 fi
 
