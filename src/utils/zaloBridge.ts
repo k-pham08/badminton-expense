@@ -5,6 +5,9 @@ const HOST_KEY = 'zaloBridgeHost';
 const TOKEN_KEY = 'zaloBridgeToken';
 const GROUP_KEY = 'zaloGroupId';
 const GROUP_NAME_KEY = 'zaloGroupName';
+const BANK_NAME_KEY = 'zaloBankName';
+const BANK_STK_KEY = 'zaloBankStk';
+const BANK_ACCOUNT_KEY = 'zaloBankAccount';
 
 export type ZaloConfig = {
   host: string;
@@ -287,3 +290,77 @@ export async function sendZaloMessage(
   });
 }
 
+// Send bank card to group
+export type SendBankCardResult = {
+  ok: boolean;
+  message?: string;
+  msgId?: number;
+  error?: string;
+};
+
+export async function sendZaloBankCard(
+  config: ZaloConfig,
+  bank: string, // BIN code (e.g., "970436" for Vietcombank)
+  accountNumber: string,
+  accountName: string,
+  groupId?: string,
+): Promise<SendBankCardResult> {
+  return zaloPost<SendBankCardResult>(config.host, config.token, '/send-bank', {
+    groupId: groupId || config.groupId,
+    bank,
+    accountNumber,
+    accountName,
+  });
+}
+
+// Whitelist management functions
+export type WhitelistStatus = {
+  ok: boolean;
+  groups: string[];
+  isEmpty: boolean;
+  message?: string;
+};
+
+export async function getWhitelistStatus(config: ZaloConfig): Promise<WhitelistStatus> {
+  return zaloGet<WhitelistStatus>(config.host, config.token, '/whitelist');
+}
+
+export async function addGroupToWhitelist(config: ZaloConfig, groupId: string, groupName: string): Promise<WhitelistStatus> {
+  return zaloPost<WhitelistStatus>(config.host, config.token, '/whitelist', { groupId, groupName });
+}
+
+export async function removeGroupFromWhitelist(config: ZaloConfig, groupId: string): Promise<WhitelistStatus> {
+  return zaloPost<WhitelistStatus>(config.host, config.token, `/whitelist/remove/${encodeURIComponent(groupId)}`, {});
+}
+
+export async function clearWhitelist(config: ZaloConfig): Promise<WhitelistStatus> {
+  return zaloPost<WhitelistStatus>(config.host, config.token, '/whitelist/clear', {});
+}
+
+// Bank info functions
+export type BankInfo = {
+  bank: string;
+  stk: string;
+  name: string;
+};
+
+export async function loadBankInfo(): Promise<BankInfo> {
+  const [bank, stk, name] = await Promise.all([
+    AsyncStorage.getItem(BANK_NAME_KEY),
+    AsyncStorage.getItem(BANK_STK_KEY),
+    AsyncStorage.getItem(BANK_ACCOUNT_KEY),
+  ]);
+  return {
+    bank: bank || '',
+    stk: stk || '',
+    name: name || '',
+  };
+}
+
+export async function saveBankInfo(bank: string, stk: string, name: string): Promise<void> {
+  await AsyncStorage.multiSet([
+    [BANK_NAME_KEY, bank.trim()],
+    [BANK_STK_KEY, stk.trim()],
+    [BANK_ACCOUNT_KEY, name.trim()],
+  ]);
+}

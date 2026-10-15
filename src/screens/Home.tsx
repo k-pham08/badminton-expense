@@ -11,12 +11,12 @@ import { SessionScreen } from './SessionScreen';
 import { SummaryScreen } from './SummaryScreen';
 import { ZaloScreen } from './ZaloScreen';
 
-const TABS: { key: TabName; label: string }[] = [
-  { key: 'month', label: 'Tháng' },
-  { key: 'summary', label: 'Tổng kết' },
-  { key: 'members', label: 'Thành viên' },
-  { key: 'courts', label: 'Sân' },
-  { key: 'zalo', label: 'Zalo' },
+const TABS: { key: TabName; label: string; icon: string }[] = [
+  { key: 'month', label: 'Tháng', icon: '📅' },
+  { key: 'summary', label: 'Tổng kết', icon: '📊' },
+  { key: 'members', label: 'Thành viên', icon: '👥' },
+  { key: 'courts', label: 'Sân', icon: '🏸' },
+  { key: 'zalo', label: 'Zalo', icon: '⚡' },
 ];
 
 export function Home() {
@@ -59,6 +59,7 @@ export function Home() {
               onPress={() => setTab(item.key)}
               style={styles.tab}
             >
+              <Text style={styles.tabIcon}>{item.icon}</Text>
               <Text style={[styles.tabLabel, active && styles.tabLabelActive]} numberOfLines={1}>
                 {item.label}
               </Text>
@@ -80,23 +81,28 @@ const styles = StyleSheet.create({
   },
   tabBar: {
     flexDirection: 'row',
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: 1,
     borderTopColor: colors.line,
     backgroundColor: colors.card,
+    paddingTop: 8,
   },
   tab: {
     flex: 1,
-    minHeight: 52,
+    minHeight: 56,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  tabIcon: {
+    fontSize: 22,
+    marginBottom: 2,
+  },
   tabLabel: {
-    fontSize: 13,
+    fontSize: 11,
     color: colors.muted,
-    fontWeight: '600',
+    fontWeight: '500',
   },
   tabLabelActive: {
     color: colors.primary,
-    fontWeight: '800',
+    fontWeight: '700',
   },
 });

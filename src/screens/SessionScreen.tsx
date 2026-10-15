@@ -38,7 +38,36 @@ import {
 import { formatDateVi, WEEKDAY_LONG, weekdayMon0FromDateId } from '../utils/date';
 import { formatVnd } from '../utils/money';
 import { hoursBetween } from '../utils/time';
-import { fetchZaloGroups, loadZaloConfig, saveZaloGroup, sendZaloMessage, type ZaloGroup } from '../utils/zaloBridge';
+import { fetchZaloGroups, getWhitelistStatus, loadZaloConfig, saveZaloGroup, sendZaloMessage, sendZaloBankCard, type ZaloGroup } from '../utils/zaloBridge';
+
+// Bank BIN codes mapping
+const BANK_BIN: Record<string, string> = {
+  'vietcombank': '970436',
+  'vcb': '970436',
+  'vietinbank': '970415',
+  'vtb': '970415',
+  'bidv': '970418',
+  'agribank': '970405',
+  'agr': '970405',
+  'techcombank': '970407',
+  'tcb': '970407',
+  'sacombank': '970403',
+  'scb': '970403',
+  'acb': '970416',
+  'mbbank': '970422',
+  'mb': '970422',
+  'vpbank': '970432',
+  'vpb': '970432',
+  'tpbank': '970423',
+  'tpb': '970423',
+  'eximbank': '970431',
+  'eib': '970431',
+  'ocb': '970448',
+  'hdbank': '970437',
+  'shb': '970443',
+  'seabank': '970440',
+  'shinhan': '970457',
+};
 
 function newExtraId(): string {
   return `e_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -102,7 +131,8 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
   const [sendGroups, setSendGroups] = useState<ZaloGroup[]>([]);
   const [sendSelectedGroup, setSendSelectedGroup] = useState<string>('');
   const [sendGroupModal, setSendGroupModal] = useState(false);
-  const [bankInfo, setBankInfo] = useState({ bank: '', stk: '', name: '' });
+  const [sendWhitelist, setSendWhitelist] = useState<string[]>([]);
+  const [bankInfo] = useState({ bank: 'TPBank', stk: '0378807478', name: 'PHAM DANG KHOA' });
 
   const shuttlePrice = month.shuttlePrice;
   const shuttleName = (month.shuttleName ?? '').trim();
@@ -664,12 +694,21 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
                   Alert.alert('Chưa kết nối Zalo', 'Vào tab Zalo để kết nối Mac.');
                   return;
                 }
-                // Load groups
+                // Load groups and whitelist
                 try {
-                  const groups = await fetchZaloGroups(config.host, config.token);
+                  const [groups, whitelistData] = await Promise.all([
+                    fetchZaloGroups(config.host, config.token),
+                    getWhitelistStatus(config).catch(() => ({ groups: [] as string[], isEmpty: true })),
+                  ]);
                   setSendGroups(groups);
+                  setSendWhitelist(whitelistData.groups || []);
                   if (!sendSelectedGroup && groups.length > 0) {
-                    setSendSelectedGroup(config.groupId || groups[0].id);
+                    // Prefer whitelisted group, fallback to default group
+                    const whitelistedGroups = groups.filter(g => whitelistData.groups?.includes(g.id));
+                    const targetGroup = whitelistedGroups[0] ?? groups.find(g => g.id === config.groupId) ?? groups[0];
+                    if (targetGroup) {
+                      setSendSelectedGroup(targetGroup.id);
+                    }
                   }
                 } catch {
                   // Use default group
@@ -718,9 +757,11 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
             </Pressable>
           </View>
           <ScrollView style={styles.pickerBody}>
-            {/* Group selection */}
-            <Text style={styles.pickerLabel}>Chọn nhóm:</Text>
-            {sendGroups.map((group) => (
+            {/* Group selection - only show whitelisted groups */}
+            <Text style={styles.pickerLabel}>
+              Chọn nhóm {sendWhitelist.length > 0 ? '(chỉ whitelist)' : '(tất cả)'}:
+            </Text>
+            {(sendWhitelist.length > 0 ? sendGroups.filter(g => sendWhitelist.includes(g.id)) : sendGroups).map((group) => (
               <Pressable
                 key={group.id}
                 style={[styles.pickerItem, sendSelectedGroup === group.id && styles.pickerItemSelected]}
@@ -733,6 +774,9 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
                 <Text style={styles.pickerItemMeta}>{group.totalMember} người</Text>
               </Pressable>
             ))}
+            {sendWhitelist.length > 0 && sendGroups.filter(g => sendWhitelist.includes(g.id)).length === 0 && (
+              <Text style={styles.hint}>⚠️ Không có nhóm nào trong whitelist. Vào tab Zalo → ⚙ để thêm nhóm.</Text>
+            )}
             
             <Pressable
               style={styles.sendBtn}
@@ -783,14 +827,26 @@ export function SessionScreen({ monthId, date, onBack }: Props) {
                     lines.push(`👥 ${people} người × ${formatVnd(share)}/người`);
                   }
                   
-                  const message = lines.join('\n');
+                  // Add intro message at the top
+                  const intro = 'Chi phí hôm nay nha mọi người 👋';
+                  const message = intro + '\n\n' + lines.join('\n');
                   const result = await sendZaloMessage(config, message, sendSelectedGroup);
                   
-                  if (result.ok) {
-                    Alert.alert('Đã gửi', 'Tin nhắn đã gửi vào nhóm Zalo.');
-                  } else {
-                    Alert.alert('Lỗi', result.error || 'Không gửi được');
+                  if (!result.ok) {
+                    Alert.alert('Lỗi', result.error || 'Không gửi được tin nhắn');
+                    return;
                   }
+                  
+                  // Send bank card if info is available
+                  if (bankInfo.bank && bankInfo.stk) {
+                    const bankKey = bankInfo.bank.toLowerCase().trim();
+                    const binCode = BANK_BIN[bankKey];
+                    if (binCode) {
+                      await sendZaloBankCard(config, binCode, bankInfo.stk, bankInfo.name || '', sendSelectedGroup);
+                    }
+                  }
+                  
+                  Alert.alert('Đã gửi', 'Tin nhắn và thông tin ngân hàng đã gửi vào nhóm Zalo.');
                 } catch (error) {
                   Alert.alert('Lỗi', error instanceof Error ? error.message : 'Không gửi được');
                 } finally {
@@ -1318,6 +1374,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 20,
     marginBottom: 40,
+  },
+  sendBtnSecondary: {
+    backgroundColor: colors.card,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    marginTop: 10,
+  },
+  sendBtnSecondaryText: {
+    color: colors.primary,
+    fontSize: 16,
+    fontWeight: '700',
   },
   sendBtnText: {
     color: '#fff',

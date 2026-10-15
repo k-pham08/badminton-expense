@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { homedir, networkInterfaces } from 'node:os';
-import { LoginQRCallbackEventType, Zalo } from 'zalo-api-final';
+import { LoginQRCallbackEventType, ThreadType, Zalo } from 'zalo-api-final';
 import { allowZaloCookieDomain } from './cookie-host.mjs';
 import {
   asPoll,
@@ -23,11 +23,13 @@ const HOME = path.join(homedir(), '.culong');
 const TOKEN_FILE = path.join(HOME, 'zalo-bridge.json');
 const CRED_FILE = path.join(HOME, 'zalo.json');
 const QR_FILE = path.join(HOME, 'zalo-qr.png');
+const WHITELIST_FILE = path.join(HOME, 'zalo-whitelist.json');
 const BOARD_POLL = 3;
 
 let token = '';
 let api = null;
 let accountName = '';
+let whitelist = { groups: [] };
 let connecting = null;
 let loginStopped = false;
 
@@ -64,6 +66,48 @@ async function loadToken() {
   await saveJson(TOKEN_FILE, { token: next });
   console.log(`Token cho app: ${next}`);
   return next;
+}
+
+// Whitelist functions
+async function loadWhitelist() {
+  const saved = await readJson(WHITELIST_FILE);
+  whitelist = saved || { groups: [] };
+  console.log(`Whitelist loaded: ${whitelist.groups.length} nhóm được phép`);
+  if (whitelist.groups.length > 0) {
+    console.log('Nhóm được phép:', whitelist.groups.join(', '));
+  }
+}
+
+async function saveWhitelist() {
+  await saveJson(WHITELIST_FILE, whitelist);
+}
+
+function isGroupAllowed(groupId) {
+  if (!whitelist.groups || whitelist.groups.length === 0) return true; // Allow all if whitelist is empty
+  return whitelist.groups.includes(groupId);
+}
+
+async function addToWhitelist(groupId, groupName) {
+  if (!whitelist.groups) whitelist.groups = [];
+  if (!whitelist.groups.includes(groupId)) {
+    whitelist.groups.push(groupId);
+    await saveWhitelist();
+    console.log(`Added group to whitelist: ${groupId} (${groupName || 'unknown'})`);
+  }
+}
+
+async function removeFromWhitelist(groupId) {
+  if (whitelist.groups) {
+    whitelist.groups = whitelist.groups.filter(id => id !== groupId);
+    await saveWhitelist();
+    console.log(`Removed group from whitelist: ${groupId}`);
+  }
+}
+
+async function clearWhitelistData() {
+  whitelist = { groups: [] };
+  await saveWhitelist();
+  console.log('Whitelist cleared');
 }
 
 function lanAddresses() {
@@ -212,6 +256,11 @@ async function listGroups(client) {
 }
 
 async function groupMembers(client, groupId) {
+  if (!isGroupAllowed(groupId)) {
+    const error = new Error('Nhóm không có trong whitelist');
+    error.status = 403;
+    throw error;
+  }
   const info = await client.getGroupInfo(groupId);
   const group = info?.gridInfoMap?.[groupId];
   if (!group) {
@@ -237,6 +286,11 @@ async function groupMembers(client, groupId) {
 }
 
 async function groupVotes(client, groupId) {
+  if (!isGroupAllowed(groupId)) {
+    const error = new Error('Nhóm không có trong whitelist');
+    error.status = 403;
+    throw error;
+  }
   const polls = [];
   let detailsOk = true;
   for (let page = 1; page <= 5; page += 1) {
@@ -295,6 +349,10 @@ async function handleCreatePoll(client, body) {
     throw new Error('Thiếu thông tin poll');
   }
   
+  if (!isGroupAllowed(groupId)) {
+    throw new Error('Nhóm không có trong whitelist. Dùng tab ⚙ để thêm nhóm.');
+  }
+  
   const pollOptions = options.map(opt => String(opt).trim()).filter(opt => opt.length > 0);
   if (pollOptions.length < 2) {
     throw new Error('Cần ít nhất 2 ngày để tạo poll');
@@ -323,10 +381,45 @@ async function handleCreatePoll(client, body) {
   }
 }
 
+async function handleSendBankCard(client, body) {
+  const { groupId, bank, accountNumber, accountName } = body;
+  if (!groupId) {
+    throw new Error('Thiếu groupId');
+  }
+  if (!isGroupAllowed(groupId)) {
+    throw new Error('Nhóm không có trong whitelist. Dùng tab ⚙ để thêm nhóm.');
+  }
+  if (!bank || !bank.trim()) {
+    throw new Error('Thiếu mã ngân hàng (binBank)');
+  }
+  if (!accountNumber || !accountNumber.trim()) {
+    throw new Error('Thiếu số tài khoản');
+  }
+  
+  console.log(`Sending bank card to group ${groupId}: ${bank} ${accountNumber}`);
+  
+  try {
+    const result = await client.sendBankCard({
+      binBank: bank.trim().toUpperCase(),
+      numAccBank: accountNumber.trim(),
+      nameAccBank: (accountName || '').trim().toUpperCase(),
+    }, groupId, ThreadType.Group);
+    
+    return { ok: true, message: 'Đã gửi thông tin ngân hàng', msgId: result?.msgId };
+  } catch (error) {
+    console.log('Send bank card error:', error?.message || error);
+    throw new Error(`Zalo: ${error?.message || 'Lỗi gửi thông tin ngân hàng'}`);
+  }
+}
+
 async function handleSendMessage(client, body) {
   const { groupId, message } = body;
   if (!groupId) {
     throw new Error('Thiếu groupId');
+  }
+  
+  if (!isGroupAllowed(groupId)) {
+    throw new Error('Nhóm không có trong whitelist. Dùng tab ⚙ để thêm nhóm.');
   }
   
   if (!message || !message.trim()) {
@@ -338,7 +431,7 @@ async function handleSendMessage(client, body) {
   try {
     const result = await client.sendMessage({
       msg: message.trim().slice(0, 2000), // Limit to 2000 chars
-    }, groupId, 'group');
+    }, groupId, ThreadType.Group);
     
     return { ok: true, message: 'Đã gửi', msgId: result?.message?.msgId };
   } catch (error) {
@@ -374,6 +467,29 @@ async function handle(req, res) {
     return;
   }
   
+  // Handle POST /send-bank (send bank card to group)
+  if (req.method === 'POST' && url.pathname === '/send-bank') {
+    if (!authorized(req.headers.authorization)) {
+      send(res, 401, { ok: false, error: 'Sai token' });
+      return;
+    }
+    const client = await liveApi();
+    if (!client) {
+      send(res, 401, { ok: false, needLogin: true, error: 'Cần quét QR trên Mac' });
+      return;
+    }
+    try {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      const result = await handleSendBankCard(client, body);
+      send(res, 200, result);
+    } catch (error) {
+      send(res, 400, { ok: false, error: error?.message || 'Lỗi gửi thông tin ngân hàng' });
+    }
+    return;
+  }
+  
   // Handle POST /send (send message to group)
   if (req.method === 'POST' && url.pathname === '/send') {
     if (!authorized(req.headers.authorization)) {
@@ -394,6 +510,71 @@ async function handle(req, res) {
     } catch (error) {
       send(res, 400, { ok: false, error: error?.message || 'Lỗi gửi tin nhắn' });
     }
+    return;
+  }
+  
+  // Whitelist management endpoints - must be before GET check
+  if (url.pathname === '/whitelist') {
+    if (!authorized(req.headers.authorization)) {
+      send(res, 401, { ok: false, error: 'Sai token' });
+      return;
+    }
+    if (req.method === 'GET') {
+      send(res, 200, {
+        ok: true,
+        groups: whitelist?.groups || [],
+        isEmpty: !whitelist?.groups?.length,
+      });
+      return;
+    }
+    if (req.method === 'POST') {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      const { groupId, groupName } = body;
+      if (!groupId) {
+        send(res, 400, { ok: false, error: 'Thiếu groupId' });
+        return;
+      }
+      await addToWhitelist(groupId, groupName || groupId);
+      send(res, 200, {
+        ok: true,
+        message: 'Đã thêm nhóm vào whitelist',
+        groups: whitelist?.groups || [],
+      });
+      return;
+    }
+  }
+  
+  // POST /whitelist/remove/:groupId
+  const whitelistRemoveMatch = /^\/whitelist\/remove\/([^/]+)$/.exec(url.pathname);
+  if (whitelistRemoveMatch && req.method === 'POST') {
+    if (!authorized(req.headers.authorization)) {
+      send(res, 401, { ok: false, error: 'Sai token' });
+      return;
+    }
+    const groupId = decodeURIComponent(whitelistRemoveMatch[1]);
+    await removeFromWhitelist(groupId);
+    send(res, 200, {
+      ok: true,
+      message: 'Đã xóa nhóm khỏi whitelist',
+      groups: whitelist?.groups || [],
+    });
+    return;
+  }
+  
+  // POST /whitelist/clear
+  if (url.pathname === '/whitelist/clear' && req.method === 'POST') {
+    if (!authorized(req.headers.authorization)) {
+      send(res, 401, { ok: false, error: 'Sai token' });
+      return;
+    }
+    await clearWhitelistData();
+    send(res, 200, {
+      ok: true,
+      message: 'Đã xóa toàn bộ whitelist',
+      groups: [],
+    });
     return;
   }
   
@@ -441,6 +622,7 @@ async function handle(req, res) {
 }
 
 token = await loadToken();
+await loadWhitelist();
 const server = createServer((req, res) => {
   handle(req, res).catch((error) => {
     console.log(error);

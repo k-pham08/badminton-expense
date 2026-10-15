@@ -1,11 +1,23 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ZaloBar } from '../components/ZaloBar';
 import { Card, PrimaryButton, SectionTitle } from '../components/ui';
 import { useStore } from '../store';
 import { colors, radius, space } from '../theme';
-import { daysInMonth, formatDateVi, monthLabel, parseMonthId, weekdayMon0FromDateId } from '../utils/date';
-import { createZaloPoll, fetchZaloGroups, loadZaloConfig, saveZaloGroup, type ZaloGroup } from '../utils/zaloBridge';
+import { daysInMonth, formatDateVi, monthLabel, parseMonthId, weekdayMon0FromDateId, todayId } from '../utils/date';
+import {
+  createZaloPoll,
+  fetchZaloGroups,
+  loadZaloConfig,
+  saveZaloGroup,
+  getWhitelistStatus,
+  addGroupToWhitelist,
+  removeGroupFromWhitelist,
+  clearWhitelist,
+  type ZaloGroup,
+  type WhitelistStatus,
+} from '../utils/zaloBridge';
 
 function thisMonthId(): string {
   const now = new Date();
@@ -16,41 +28,107 @@ import type { Member, ZaloContact } from '../types';
 import type { ZaloPerson } from '../utils/vote';
 import { entriesForPoll, loadZalo, peopleForPoll, useZaloSyncState } from '../utils/zaloSync';
 
-type Tab = 'polls' | 'dates' | 'members' | 'apply' | 'create';
+type Tab = 'home' | 'create' | 'members' | 'settings';
 
 interface SelectedDate {
   date: string;
   title: string;
-  people: string[]; // Zalo person IDs who voted for this date
+  people: string[];
 }
 
 export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
   const store = useStore();
   const sync = useZaloSyncState();
+  const insets = useSafeAreaInsets();
 
-  const [tab, setTab] = useState<Tab>('polls');
+  const [tab, setTab] = useState<Tab>('home');
+  const [showPollSelector, setShowPollSelector] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showGroupPicker, setShowGroupPicker] = useState(false);
+  
+  // Poll selection state
   const [selectedPollIds, setSelectedPollIds] = useState<Set<string>>(new Set());
   const [selectedDates, setSelectedDates] = useState<SelectedDate[]>([]);
-  const [pickedPersonId, setPickedPersonId] = useState<string | null>(null);
-  const [applyMonthId, setApplyMonthId] = useState(currentMonthId || thisMonthId());
   
   // Create poll state
   const [createMonthId, setCreateMonthId] = useState(thisMonthId());
   const [createSelectedDates, setCreateSelectedDates] = useState<string[]>([]);
   const [createWeekdays, setCreateWeekdays] = useState<number[]>([]);
   const [createLoading, setCreateLoading] = useState(false);
+  const [createTitle, setCreateTitle] = useState('');
   const [groups, setGroups] = useState<ZaloGroup[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
-  const [showGroupPicker, setShowGroupPicker] = useState(false);
   
-  // Hidden polls state
-  const [hiddenPollIds, setHiddenPollIds] = useState<Set<string>>(new Set());
+  // Settings state
+  const [whitelistStatus, setWhitelistStatus] = useState<WhitelistStatus | null>(null);
+  const [whitelistLoading, setWhitelistLoading] = useState(false);
+  const [whitelistSelectedGroups, setWhitelistSelectedGroups] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     void loadZalo(false);
   }, []);
 
-  // Load groups for create poll
+  const todayStr = todayId();
+  
+  const dates = selectedPollIds.size > 0
+    ? sync.polls
+        .filter(p => selectedPollIds.has(p.id))
+        .flatMap(p =>
+          entriesForPoll(p).map(e => ({
+            date: e.date,
+            title: p.question,
+            people: e.names,
+          }))
+        )
+        .sort((a, b) => a.date.localeCompare(b.date))
+    : [];
+
+  const handleSelectAll = () => {
+    const future = dates.filter(d => d.date >= todayStr).map(d => d.date);
+    setSelectedDates(future.map(d => ({ date: d, title: '', people: [] })));
+  };
+
+  const handleClearAll = () => setSelectedDates([]);
+
+  const handleToggleDate = (date: string, title: string) => {
+    setSelectedDates(prev => {
+      const exists = prev.find(d => d.date === date);
+      if (exists) return prev.filter(d => d.date !== date);
+      return [...prev, { date, title, people: [] }];
+    });
+  };
+
+  const handleApplyToMonth = async () => {
+    if (selectedDates.length === 0) {
+      Alert.alert('Thông báo', 'Chưa chọn ngày nào');
+      return;
+    }
+    const config = await loadZaloConfig();
+    if (!config) {
+      Alert.alert('Lỗi', 'Chưa kết nối Zalo');
+      return;
+    }
+    Alert.alert(
+      'Áp dụng',
+      `Thêm ${selectedDates.length} ngày vào lịch tháng này?`,
+      [
+        { text: 'Hủy', style: 'cancel' },
+        {
+          text: 'Áp dụng',
+          onPress: () => {
+            // Apply dates to store
+            for (const { date } of selectedDates) {
+              store.addPlayingDate(currentMonthId, date);
+            }
+            Alert.alert('Thành công', `Đã thêm ${selectedDates.length} ngày`);
+            setSelectedDates([]);
+            setShowDatePicker(false);
+          },
+        },
+      ]
+    );
+  };
+
   const loadGroups = useCallback(async () => {
     const config = await loadZaloConfig();
     if (!config) {
@@ -58,1383 +136,1109 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
       return;
     }
     try {
-      const groupList = await fetchZaloGroups(config.host, config.token);
-      setGroups(groupList);
-      if (groupList.length > 0 && !selectedGroupId) {
-        setSelectedGroupId(config.groupId || groupList[0].id);
-      }
-      setShowGroupPicker(true);
+      const list = await fetchZaloGroups(config.host, config.token);
+      setGroups(list);
+      if (list.length === 1) setSelectedGroupId(list[0].id);
     } catch (error) {
       Alert.alert('Lỗi', error instanceof Error ? error.message : 'Không tải được nhóm');
     }
-  }, [selectedGroupId]);
-
-  // Toggle weekday selection for create poll
-  const toggleCreateWeekday = useCallback((weekday: number) => {
-    setCreateWeekdays((prev) => {
-      if (prev.includes(weekday)) {
-        return prev.filter((d) => d !== weekday);
-      }
-      return [...prev, weekday].sort();
-    });
   }, []);
 
-  // Select all weekdays in month
-  const selectAllCreateWeekdays = useCallback(() => {
-    setCreateWeekdays([0, 1, 2, 3, 4, 5, 6]);
-  }, []);
-
-  // Clear weekdays
-  const clearCreateWeekdays = useCallback(() => {
-    setCreateWeekdays([]);
-  }, []);
-
-  // Toggle date for create poll
-  const toggleCreateDate = useCallback((date: string) => {
-    setCreateSelectedDates((prev) => {
-      if (prev.includes(date)) {
-        return prev.filter((d) => d !== date);
-      }
-      return [...prev, date].sort();
-    });
-  }, []);
-
-  // Select all dates in month
-  const selectAllCreateDates = useCallback(() => {
-    const { year, month } = parseMonthId(createMonthId);
-    const total = daysInMonth(year, month);
-    const allDates: string[] = [];
-    for (let day = 1; day <= total; day++) {
-      allDates.push(`${createMonthId}-${String(day).padStart(2, '0')}`);
-    }
-    setCreateSelectedDates(allDates);
-  }, [createMonthId]);
-
-  // Clear dates
-  const clearCreateDates = useCallback(() => {
-    setCreateSelectedDates([]);
-  }, []);
-
-  // Toggle hide poll
-  const toggleHidePoll = useCallback((pollId: string) => {
-    setHiddenPollIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(pollId)) {
-        next.delete(pollId);
-      } else {
-        next.add(pollId);
-      }
-      return next;
-    });
-  }, []);
-
-  // Get dates based on selected weekdays
-  const weekdayDates = useCallback((): string[] => {
-    const { year, month } = parseMonthId(createMonthId);
-    const total = daysInMonth(year, month);
-    const allDates: string[] = [];
-    for (let day = 1; day <= total; day++) {
-      allDates.push(`${createMonthId}-${String(day).padStart(2, '0')}`);
-    }
-    return allDates.filter((date: string) => createWeekdays.includes(weekdayMon0FromDateId(date)));
-  }, [createMonthId, createWeekdays]);
-
-  // All selected dates (from weekdays + manual)
-  const allCreateSelectedDates = useCallback((): string[] => {
-    const wdDates = weekdayDates();
-    const all = new Set([...wdDates, ...createSelectedDates]);
-    return [...all].sort();
-  }, [weekdayDates, createSelectedDates]);
-
-  // Format date for Zalo poll (T3 - 10/11)
-  const formatDateForPoll = useCallback((dateId: string): string => {
-    const [y, m, d] = dateId.split('-').map(Number);
-    const weekday = weekdayMon0FromDateId(dateId);
-    // 0=Mon=T2, 1=Tue=T3, 2=Wed=T4, 3=Thu=T5, 4=Fri=T6, 5=Sat=T7, 6=Sun=CN
-    const weekdayLabels = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
-    return `${weekdayLabels[weekday]} - ${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
-  }, []);
-
-  // Create poll
   const handleCreatePoll = useCallback(async () => {
-    const dates = allCreateSelectedDates();
-    if (dates.length < 2) {
-      Alert.alert('Lỗi', 'Cần chọn ít nhất 2 ngày để tạo poll');
+    if (!createTitle.trim()) {
+      Alert.alert('Lỗi', 'Nhập tiêu đề phiếu');
       return;
     }
-    
-    // Limit to 20 dates per poll (Zalo limit)
-    const maxDates = 20;
-    const limitedDates = dates.slice(0, maxDates);
-    if (dates.length > maxDates) {
-      Alert.alert('Giới hạn', `Zalo chỉ cho tối đa ${maxDates} ngày mỗi poll. Sẽ tạo poll với ${maxDates} ngày đầu tiên.`);
+    if (createSelectedDates.length === 0 && createWeekdays.length === 0) {
+      Alert.alert('Lỗi', 'Chọn ngày hoặc ngày trong tuần');
+      return;
     }
+    if (!selectedGroupId) {
+      Alert.alert('Lỗi', 'Chọn nhóm Zalo');
+      return;
+    }
+    setCreateLoading(true);
+    const config = await loadZaloConfig();
+    if (!config) {
+      Alert.alert('Lỗi', 'Chưa kết nối Zalo');
+      setCreateLoading(false);
+      return;
+    }
+    try {
+      await createZaloPoll(config, createTitle.trim(), createSelectedDates);
+      Alert.alert('Thành công', 'Đã tạo phiếu bình chọn');
+      setCreateTitle('');
+      setCreateSelectedDates([]);
+      setCreateWeekdays([]);
+    } catch (error) {
+      Alert.alert('Lỗi', error instanceof Error ? error.message : 'Tạo phiếu thất bại');
+    } finally {
+      setCreateLoading(false);
+    }
+  }, [createTitle, createSelectedDates, createWeekdays, selectedGroupId]);
 
+  // Whitelist functions
+  const loadWhitelist = useCallback(async () => {
     const config = await loadZaloConfig();
     if (!config) {
       Alert.alert('Lỗi', 'Chưa kết nối Zalo');
       return;
     }
-
-    const groupId = selectedGroupId || config.groupId;
-    const group = groups.find((g) => g.id === groupId);
-    if (group) {
-      await saveZaloGroup(groupId, group.name);
-    }
-
-    setCreateLoading(true);
+    setWhitelistLoading(true);
     try {
-      const options = limitedDates.map(formatDateForPoll);
-      // Poll title: "Vote 12 - 2026"
-      const { year, month } = parseMonthId(createMonthId);
-      const pollTitle = `Vote ${month} - ${year}`;
-      const result = await createZaloPoll(config, pollTitle, options);
-      if (result.ok) {
-        Alert.alert('Thành công', `Đã tạo poll với ${limitedDates.length} ngày`);
-        // Reload polls
-        await loadZalo(true);
-        setTab('polls');
-      } else {
-        Alert.alert('Lỗi', result.error || 'Không tạo được poll');
-      }
+      const status = await getWhitelistStatus(config);
+      setWhitelistStatus(status);
     } catch (error) {
-      Alert.alert('Lỗi', error instanceof Error ? error.message : 'Không tạo được poll');
+      Alert.alert('Lỗi', error instanceof Error ? error.message : 'Không tải được whitelist');
     } finally {
-      setCreateLoading(false);
+      setWhitelistLoading(false);
     }
-  }, [allCreateSelectedDates, formatDateForPoll, selectedGroupId, groups, createMonthId]);
-
-  // Extract dates from selected polls
-  const allDates = useCallback((): SelectedDate[] => {
-    const dateMap = new Map<string, SelectedDate>();
-
-    // If no polls selected, return empty
-    if (selectedPollIds.size === 0) return [];
-
-    for (const poll of sync.polls) {
-      if (poll.anonymous) continue;
-      // Only include selected polls
-      if (!selectedPollIds.has(poll.id)) continue;
-      
-      const entries = entriesForPoll(poll);
-      for (const entry of entries) {
-        const existing = dateMap.get(entry.date);
-        const allPeople = [...(existing?.people ?? []), ...(entry.voterIds ?? [])];
-        dateMap.set(entry.date, {
-          date: entry.date,
-          title: entry.title,
-          people: [...new Set(allPeople)],
-        });
-      }
-    }
-
-    return [...dateMap.values()].sort((a, b) => a.date.localeCompare(b.date));
-  }, [sync.polls, selectedPollIds]);
-
-  // Toggle poll selection
-  const togglePoll = useCallback((pollId: string) => {
-    setSelectedPollIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(pollId)) {
-        next.delete(pollId);
-      } else {
-        next.add(pollId);
-      }
-      return next;
-    });
-    // Clear selected dates when polls change
-    setSelectedDates([]);
   }, []);
 
-  // Select all polls
-  const selectAllPolls = useCallback(() => {
-    setSelectedPollIds(new Set(sync.polls.filter(p => !p.anonymous).map(p => p.id)));
-    setSelectedDates([]);
-  }, [sync.polls]);
-
-  // Clear poll selection
-  const clearPolls = useCallback(() => {
-    setSelectedPollIds(new Set());
-    setSelectedDates([]);
-  }, []);
-
-  const toggleDate = useCallback((date: string) => {
-    setSelectedDates((prev) => {
-      if (prev.some((d) => d.date === date)) {
-        return prev.filter((d) => d.date !== date);
-      }
-      const newDate = allDates().find((d) => d.date === date);
-      if (!newDate) return prev;
-      return [...prev, newDate];
-    });
-  }, [allDates]);
-
-  const toggleAllDates = useCallback((futureOnly = true) => {
-    const dates = allDates();
-    const today = new Date();
-    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
-    if (futureOnly) {
-      const futureDates = dates.filter((d) => d.date >= todayStr);
-      setSelectedDates(futureDates);
-    } else {
-      setSelectedDates(dates);
-    }
-  }, [allDates]);
-
-  const clearDates = useCallback(() => {
-    setSelectedDates([]);
-  }, []);
-
-  const handleApplyToMonth = useCallback(() => {
-    if (selectedDates.length === 0) {
-      Alert.alert('Chưa chọn ngày', 'Hãy chọn ít nhất một ngày để áp dụng.');
+  const handleAddToWhitelist = useCallback(async (group: ZaloGroup) => {
+    const config = await loadZaloConfig();
+    if (!config) {
+      Alert.alert('Lỗi', 'Chưa kết nối Zalo');
       return;
     }
-
-    // Get linked members for each date
-    const contacts = store.data.zaloContacts;
-
-    let appliedCount = 0;
-    let skippedCount = 0;
-
-    for (const selDate of selectedDates) {
-      // Get Zalo person IDs who voted for this date
-      const zaloIds = selDate.people;
-
-      // Convert to member IDs that are linked
-      const memberIds: string[] = [];
-      for (const zaloId of zaloIds) {
-        const contact = contacts.find((c) => c.id === zaloId);
-        if (contact?.memberId) {
-          memberIds.push(contact.memberId);
-        }
-      }
-
-      if (memberIds.length === 0) {
-        skippedCount++;
-        continue;
-      }
-
-      // Apply to month
-      store.applySessionToMonth(applyMonthId, selDate.date, memberIds);
-      appliedCount++;
+    try {
+      const status = await addGroupToWhitelist(config, group.id, group.name);
+      setWhitelistStatus(status);
+      setShowGroupPicker(false);
+      Alert.alert('Thành công', `Đã thêm "${group.name}" vào whitelist`);
+    } catch (error) {
+      Alert.alert('Lỗi', error instanceof Error ? error.message : 'Không thêm được');
     }
+  }, []);
 
-    const summary = `${appliedCount} ngày đã thêm${skippedCount > 0 ? `, ${skippedCount} ngày bỏ qua (chưa gắn thành viên)` : ''}`;
-    Alert.alert('Đã áp dụng', summary);
+  const handleRemoveFromWhitelist = useCallback(async (groupId: string, groupName?: string) => {
+    Alert.alert(
+      'Xóa khỏi whitelist',
+      `Bạn có chắc muốn xóa "${groupName || groupId}" khỏi whitelist?`,
+      [
+        { text: 'Hủy', style: 'cancel' },
+        {
+          text: 'Xóa',
+          style: 'destructive',
+          onPress: async () => {
+            const config = await loadZaloConfig();
+            if (!config) return;
+            try {
+              const status = await removeGroupFromWhitelist(config, groupId);
+              setWhitelistStatus(status);
+            } catch (error) {
+              Alert.alert('Lỗi', error instanceof Error ? error.message : 'Không xóa được');
+            }
+          },
+        },
+      ]
+    );
+  }, []);
 
-    // Clear selected dates after applying
-    setSelectedDates([]);
-    setTab('dates');
-  }, [selectedDates, applyMonthId, store, store.data.zaloContacts]);
-
-  const people = sync.people;
-  const contacts = store.data.zaloContacts;
-  const members = store.data.members;
-
-  // Get linked member for a Zalo person
-  const linkedMember = useCallback((personId: string): Member | undefined => {
-    const contact = contacts.find((c) => c.id === personId);
-    return members.find((m) => m.id === contact?.memberId);
-  }, [contacts, members]);
-
-  // Handle link a Zalo person to a member
-  const handleLinkToMember = useCallback((person: ZaloBridgePerson, memberId: string) => {
-    // First, ensure person exists in zaloContacts using importZaloPeople
-    const zaloPerson: ZaloPerson = {
-      id: person.id,
-      name: person.name,
-      avatar: person.avatar ?? '',
-    };
-    store.importZaloPeople([zaloPerson]);
-    // Now link the contact to member
-    store.linkZaloContact(person.id, memberId);
-    setPickedPersonId(null);
-  }, [store]);
-
-  // Handle create member from Zalo person
-  const handleCreateMember = useCallback((person: ZaloBridgePerson) => {
-    // First, ensure person exists in zaloContacts
-    const zaloPerson: ZaloPerson = {
-      id: person.id,
-      name: person.name,
-      avatar: person.avatar ?? '',
-    };
-    store.importZaloPeople([zaloPerson]);
-    // Then create member and link
-    const newId = store.addMember(person.name);
-    if (newId) {
-      store.linkZaloContact(person.id, newId);
-    }
-    setPickedPersonId(null);
-  }, [store]);
-
-  // Get people from all polls (unique)
-  const pollPeople = useCallback((): ZaloBridgePerson[] => {
-    const idSet = new Set<string>();
-    const result: ZaloBridgePerson[] = [];
-
-    for (const poll of sync.polls) {
-      const pollPeople = peopleForPoll(poll, people);
-      for (const p of pollPeople) {
-        if (!idSet.has(p.id)) {
-          idSet.add(p.id);
-          result.push(p);
-        }
-      }
-    }
-
-    return result.sort((a, b) => a.name.localeCompare(b.name, 'vi'));
-  }, [sync.polls, people]);
-
-  const dates = allDates();
-  const today = new Date();
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  const futureDates = dates.filter((d) => d.date >= todayStr);
+  const handleClearWhitelist = useCallback(async () => {
+    Alert.alert(
+      'Xóa whitelist',
+      'Bạn có chắc muốn xóa toàn bộ whitelist? Tất cả nhóm sẽ được phép.',
+      [
+        { text: 'Hủy', style: 'cancel' },
+        {
+          text: 'Xóa',
+          style: 'destructive',
+          onPress: async () => {
+            const config = await loadZaloConfig();
+            if (!config) return;
+            try {
+              const status = await clearWhitelist(config);
+              setWhitelistStatus(status);
+            } catch (error) {
+              Alert.alert('Lỗi', error instanceof Error ? error.message : 'Không xóa được');
+            }
+          },
+        },
+      ]
+    );
+  }, []);
 
   return (
-    <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      <Text style={styles.title}>Zalo</Text>
-
-      {/* Tab buttons */}
-      <View style={styles.tabBar}>
-        <Pressable
-          style={[styles.tab, tab === 'polls' && styles.tabActive]}
-          onPress={() => setTab('polls')}
-        >
-          <Text style={[styles.tabText, tab === 'polls' && styles.tabTextActive]}>Phiếu</Text>
-          {selectedPollIds.size > 0 && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{selectedPollIds.size}</Text>
-            </View>
-          )}
-        </Pressable>
-        <Pressable
-          style={[styles.tab, tab === 'dates' && styles.tabActive]}
-          onPress={() => setTab('dates')}
-        >
-          <Text style={[styles.tabText, tab === 'dates' && styles.tabTextActive]}>Ngày</Text>
-          {selectedDates.length > 0 && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{selectedDates.length}</Text>
-            </View>
-          )}
-        </Pressable>
-        <Pressable
-          style={[styles.tab, tab === 'members' && styles.tabActive]}
-          onPress={() => setTab('members')}
-        >
-          <Text style={[styles.tabText, tab === 'members' && styles.tabTextActive]}>Thành viên</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.tab, tab === 'apply' && styles.tabActive]}
-          onPress={() => setTab('apply')}
-        >
-          <Text style={[styles.tabText, tab === 'apply' && styles.tabTextActive]}>Áp dụng</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.tab, tab === 'create' && styles.tabActive]}
-          onPress={() => setTab('create')}
-        >
-          <Text style={[styles.tabText, tab === 'create' && styles.tabTextActive]}>+Tạo</Text>
-        </Pressable>
+    <SafeAreaView style={[styles.container]} edges={['top', 'left', 'right']}>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>⚡ Zalo</Text>
+        <Text style={styles.headerSubtitle}>Badminton Expense</Text>
       </View>
 
       <ZaloBar />
 
-      {/* Tab: Phiếu */}
-      {tab === 'polls' && (
-        <Card>
-          <SectionTitle>Chọn phiếu ghim</SectionTitle>
-          <Text style={styles.hint}>
-            Bấm để chọn. Giữ để ẩn poll.
-          </Text>
+      <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
+        {/* HOME TAB */}
+        {tab === 'home' && (
+          <>
+            {/* Quick Actions Card */}
+            <Card>
+              <Text style={styles.cardTitle}>Hành động nhanh</Text>
+              <View style={styles.quickActions}>
+                <Pressable style={styles.quickAction} onPress={() => { setShowPollSelector(true); }}>
+                  <Text style={styles.quickActionIcon}>📊</Text>
+                  <Text style={styles.quickActionLabel}>Chọn phiếu</Text>
+                </Pressable>
+                <Pressable style={styles.quickAction} onPress={() => { setShowDatePicker(true); }}>
+                  <Text style={styles.quickActionIcon}>📅</Text>
+                  <Text style={styles.quickActionLabel}>Chọn ngày</Text>
+                </Pressable>
+              </View>
+            </Card>
 
-          {sync.polls.filter(p => !hiddenPollIds.has(p.id)).length === 0 ? (
-            <Text style={styles.empty}>
-              Không có poll nào.{'\n'}
-              {hiddenPollIds.size > 0 && (
-                <Text>
-                  {' '}
-                  <Text style={styles.link} onPress={() => setHiddenPollIds(new Set())}>
-                    Hiện tất cả
-                  </Text>
+            {/* Selected Polls Summary */}
+            {selectedPollIds.size > 0 && (
+              <Card>
+                <View style={styles.selectionHeader}>
+                  <Text style={styles.selectionTitle}>📊 {selectedPollIds.size} phiếu đã chọn</Text>
+                  <Pressable onPress={() => { setSelectedPollIds(new Set()); }}>
+                    <Text style={styles.clearText}>Xóa</Text>
+                  </Pressable>
+                </View>
+                <Text style={styles.selectionMeta}>
+                  {dates.length} ngày trong các phiếu
                 </Text>
+                <Pressable style={styles.actionBtn} onPress={() => setShowDatePicker(true)}>
+                  <Text style={styles.actionBtnText}>Tiếp tục →</Text>
+                </Pressable>
+              </Card>
+            )}
+
+            {/* Selected Dates Summary */}
+            {selectedDates.length > 0 && (
+              <Card>
+                <View style={styles.selectionHeader}>
+                  <Text style={styles.selectionTitle}>📅 {selectedDates.length} ngày đã chọn</Text>
+                  <Pressable onPress={handleClearAll}>
+                    <Text style={styles.clearText}>Xóa</Text>
+                  </Pressable>
+                </View>
+                <View style={styles.datePreview}>
+                  {selectedDates.slice(0, 3).map((d) => (
+                    <View key={d.date} style={styles.dateChip}>
+                      <Text style={styles.dateChipText}>{formatDateVi(d.date).slice(0, 5)}</Text>
+                    </View>
+                  ))}
+                  {selectedDates.length > 3 && (
+                    <View style={styles.dateChip}>
+                      <Text style={styles.dateChipText}>+{selectedDates.length - 3}</Text>
+                    </View>
+                  )}
+                </View>
+                <Pressable style={styles.applyBtn} onPress={handleApplyToMonth}>
+                  <Text style={styles.applyBtnText}>Áp dụng vào lịch</Text>
+                </Pressable>
+              </Card>
+            )}
+
+            {/* Polls List */}
+            <Card>
+              <Text style={styles.cardTitle}>Phiếu gần đây ({sync.polls.length})</Text>
+              {sync.polls.length === 0 ? (
+                <Text style={styles.emptyText}>Chưa có phiếu nào</Text>
+              ) : (
+                sync.polls.slice(0, 5).map((poll) => (
+                  <Pressable
+                    key={poll.id}
+                    style={styles.pollItem}
+                    onPress={() => {
+                      setSelectedPollIds(prev => {
+                        const next = new Set(prev);
+                        if (next.has(poll.id)) next.delete(poll.id);
+                        else next.add(poll.id);
+                        return next;
+                      });
+                    }}
+                  >
+                    <View style={[styles.pollCheckbox, selectedPollIds.has(poll.id) && styles.pollCheckboxActive]}>
+                      {selectedPollIds.has(poll.id) && <Text style={styles.pollCheckmark}>✓</Text>}
+                    </View>
+                    <View style={styles.pollInfo}>
+                      <Text style={styles.pollName}>{poll.question}</Text>
+                      <Text style={styles.pollMeta}>{entriesForPoll(poll).length} ngày</Text>
+                    </View>
+                  </Pressable>
+                ))
               )}
-            </Text>
-          ) : (
-            <>
-              <View style={styles.dateActions}>
-                <Pressable onPress={selectAllPolls}>
-                  <Text style={styles.link}>Chọn tất cả</Text>
+              {sync.polls.length > 5 && (
+                <Pressable style={styles.viewMore} onPress={() => setShowPollSelector(true)}>
+                  <Text style={styles.viewMoreText}>Xem tất cả ({sync.polls.length})</Text>
                 </Pressable>
-                <Text style={styles.separator}> · </Text>
-                <Pressable onPress={clearPolls}>
-                  <Text style={styles.link}>Bỏ chọn</Text>
-                </Pressable>
-                {hiddenPollIds.size > 0 && (
-                  <>
-                    <Text style={styles.separator}> · </Text>
-                    <Pressable onPress={() => setHiddenPollIds(new Set())}>
-                      <Text style={styles.link}>Hiện ẩn ({hiddenPollIds.size})</Text>
-                    </Pressable>
-                  </>
-                )}
+              )}
+            </Card>
+          </>
+        )}
+
+        {/* CREATE TAB */}
+        {tab === 'create' && (
+          <>
+            <Card>
+              <Text style={styles.cardTitle}>Tạo phiếu bình chọn mới</Text>
+              
+              <Text style={styles.inputLabel}>Tiêu đề phiếu</Text>
+              <TextInput
+                style={styles.textInput}
+                value={createTitle}
+                onChangeText={setCreateTitle}
+                placeholder="VD: Chọn ngày đánh tháng này"
+                placeholderTextColor={colors.muted}
+              />
+
+              <Text style={styles.inputLabel}>Chọn nhóm Zalo</Text>
+              <Pressable style={styles.selector} onPress={() => { loadGroups(); setShowGroupPicker(true); }}>
+                <Text style={styles.selectorText}>
+                  {groups.find(g => g.id === selectedGroupId)?.name || 'Chọn nhóm...'}
+                </Text>
+                <Text style={styles.selectorArrow}>▼</Text>
+              </Pressable>
+
+              <Text style={styles.inputLabel}>Hoặc chọn ngày cụ thể</Text>
+              <Pressable style={styles.dateSelectorBtn} onPress={() => Alert.alert('Chọn ngày', 'Tính năng đang phát triển')}>
+                <Text style={styles.dateSelectorText}>+ Thêm ngày cụ thể</Text>
+              </Pressable>
+
+              {createSelectedDates.length > 0 && (
+                <View style={styles.selectedDates}>
+                  {createSelectedDates.map((date) => (
+                    <View key={date} style={styles.selectedDateChip}>
+                      <Text style={styles.selectedDateText}>{date}</Text>
+                      <Pressable onPress={() => setCreateSelectedDates(prev => prev.filter(d => d !== date))}>
+                        <Text style={styles.removeDateText}>×</Text>
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              <Text style={styles.inputLabel}>Hoặc chọn ngày trong tuần</Text>
+              <View style={styles.weekdayGrid}>
+                {['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map((day, i) => (
+                  <Pressable
+                    key={day}
+                    style={[styles.weekdayBtn, createWeekdays.includes(i) && styles.weekdayBtnActive]}
+                    onPress={() => {
+                      setCreateWeekdays(prev =>
+                        prev.includes(i) ? prev.filter(d => d !== i) : [...prev, i]
+                      );
+                    }}
+                  >
+                    <Text style={[styles.weekdayText, createWeekdays.includes(i) && styles.weekdayTextActive]}>
+                      {day}
+                    </Text>
+                  </Pressable>
+                ))}
               </View>
 
-              {sync.polls
-                .filter(p => !hiddenPollIds.has(p.id))
-                .map((poll) => {
+              <Pressable
+                style={[styles.createBtn, createLoading && styles.createBtnDisabled]}
+                onPress={handleCreatePoll}
+                disabled={createLoading}
+              >
+                <Text style={styles.createBtnText}>
+                  {createLoading ? 'Đang tạo...' : '🚀 Tạo phiếu bình chọn'}
+                </Text>
+              </Pressable>
+            </Card>
+          </>
+        )}
+
+        {/* MEMBERS TAB */}
+        {tab === 'members' && (
+          <>
+            <Card>
+              <Text style={styles.cardTitle}>👥 Thành viên nhóm</Text>
+              <Text style={styles.cardSubtitle}>{sync.people.length} thành viên</Text>
+              
+              <View style={styles.memberGrid}>
+                {sync.people.slice(0, 12).map((person) => (
+                  <View key={person.id} style={styles.memberItem}>
+                    <View style={styles.memberAvatar}>
+                      {person.avatar ? (
+                        <Image source={{ uri: person.avatar }} style={styles.memberAvatarImg} />
+                      ) : (
+                        <Text style={styles.memberAvatarText}>{person.name.charAt(0)}</Text>
+                      )}
+                    </View>
+                    <Text style={styles.memberName} numberOfLines={1}>{person.name}</Text>
+                  </View>
+                ))}
+              </View>
+              {sync.people.length > 12 && (
+                <Text style={styles.moreText}>+{sync.people.length - 12} thành viên khác</Text>
+              )}
+            </Card>
+          </>
+        )}
+
+        {/* SETTINGS TAB */}
+        {tab === 'settings' && (
+          <>
+            <Card>
+              <Text style={styles.cardTitle}>⚙️ Cài đặt</Text>
+              
+              {/* Whitelist Status */}
+              <View style={styles.settingSection}>
+                <Text style={styles.settingLabel}>🔒 Whitelist nhóm</Text>
+                <Text style={styles.settingHint}>
+                  Whitelist giới hạn nhóm Zalo được phép tương tác
+                </Text>
+                <View style={styles.statusBox}>
+                  <Text style={styles.statusText}>
+                    {whitelistStatus?.isEmpty
+                      ? '🔓 Tất cả nhóm đều được phép'
+                      : `🔒 ${whitelistStatus?.groups?.length || 0} nhóm được phép`}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Current Whitelist */}
+              {!whitelistStatus?.isEmpty && whitelistStatus?.groups && whitelistStatus.groups.length > 0 && (
+                <View style={styles.whitelistList}>
+                  <Text style={styles.settingLabel}>Nhóm trong whitelist:</Text>
+                  {whitelistStatus.groups.map((groupId) => {
+                    const group = groups.find(g => g.id === groupId);
+                    return (
+                      <View key={groupId} style={styles.whitelistItem}>
+                        <Text style={styles.whitelistId}>{group?.name || groupId.slice(0, 16) + '...'}</Text>
+                        <Pressable
+                          style={styles.removeBtn}
+                          onPress={() => void handleRemoveFromWhitelist(groupId, group?.name)}
+                        >
+                          <Text style={styles.removeBtnText}>Xóa</Text>
+                        </Pressable>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+
+              {/* Actions */}
+              <View style={styles.settingActions}>
+                <Pressable
+                  style={styles.settingBtn}
+                  onPress={async () => {
+                    setWhitelistSelectedGroups(new Set(whitelistStatus?.groups || []));
+                    await loadGroups();
+                    setShowGroupPicker(true);
+                  }}
+                >
+                  <Text style={styles.settingBtnText}>+ Thêm nhóm vào whitelist</Text>
+                </Pressable>
+                {!whitelistStatus?.isEmpty && (
+                  <Pressable style={styles.clearBtn} onPress={() => void handleClearWhitelist()}>
+                    <Text style={styles.clearBtnText}>Xóa toàn bộ whitelist</Text>
+                  </Pressable>
+                )}
+              </View>
+            </Card>
+
+            <Card>
+              <Text style={styles.cardTitle}>ℹ️ Thông tin</Text>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Tài khoản Zalo</Text>
+                <Text style={styles.infoValue}>Đăng Khoa</Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Phiếu đang hoạt động</Text>
+                <Text style={styles.infoValue}>{sync.polls.length}</Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Thành viên đã sync</Text>
+                <Text style={styles.infoValue}>{sync.people.length}</Text>
+              </View>
+            </Card>
+          </>
+        )}
+      </ScrollView>
+
+      {/* Bottom Navigation */}
+      <View style={[styles.bottomNav]}>
+        <Pressable style={[styles.navItem, tab === 'home' && styles.navItemActive]} onPress={() => setTab('home')}>
+          <Text style={styles.navIcon}>🏠</Text>
+          <Text style={[styles.navLabel, tab === 'home' && styles.navLabelActive]}>Trang chủ</Text>
+        </Pressable>
+        <Pressable style={[styles.navItem, tab === 'create' && styles.navItemActive]} onPress={() => setTab('create')}>
+          <Text style={styles.navIcon}>➕</Text>
+          <Text style={[styles.navLabel, tab === 'create' && styles.navLabelActive]}>Tạo phiếu</Text>
+        </Pressable>
+        <Pressable style={[styles.navItem, tab === 'members' && styles.navItemActive]} onPress={() => setTab('members')}>
+          <Text style={styles.navIcon}>👥</Text>
+          <Text style={[styles.navLabel, tab === 'members' && styles.navLabelActive]}>Thành viên</Text>
+        </Pressable>
+        <Pressable style={[styles.navItem, tab === 'settings' && styles.navItemActive]} onPress={() => { setTab('settings'); void loadWhitelist(); void loadGroups(); }}>
+          <Text style={styles.navIcon}>⚙️</Text>
+          <Text style={[styles.navLabel, tab === 'settings' && styles.navLabelActive]}>Cài đặt</Text>
+        </Pressable>
+      </View>
+
+      {/* Poll Selector Modal */}
+      <Modal visible={showPollSelector} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Chọn phiếu bình chọn</Text>
+              <Pressable onPress={() => setShowPollSelector(false)}>
+                <Text style={styles.modalClose}>✕</Text>
+              </Pressable>
+            </View>
+            <ScrollView style={styles.modalScroll}>
+              {sync.polls.map((poll) => {
                 const isSelected = selectedPollIds.has(poll.id);
                 const entryCount = entriesForPoll(poll).length;
                 return (
                   <Pressable
                     key={poll.id}
-                    style={[styles.pollRow, isSelected && styles.pollRowSelected]}
-                    onPress={() => togglePoll(poll.id)}
-                    onLongPress={() => {
-                      Alert.alert(
-                        poll.question,
-                        'Chọn thao tác:',
-                        [
-                          { text: 'Hủy', style: 'cancel' },
-                          { text: 'Ẩn poll này', style: 'destructive', onPress: () => toggleHidePoll(poll.id) },
-                        ]
-                      );
+                    style={[styles.modalItem, isSelected && styles.modalItemSelected]}
+                    onPress={() => {
+                      setSelectedPollIds(prev => {
+                        const next = new Set(prev);
+                        if (next.has(poll.id)) next.delete(poll.id);
+                        else next.add(poll.id);
+                        return next;
+                      });
                     }}
                   >
-                    <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
-                      {isSelected ? <Text style={styles.checkmark}>✓</Text> : null}
+                    <View style={[styles.checkbox, isSelected && styles.checkboxActive]}>
+                      {isSelected && <Text style={styles.checkmark}>✓</Text>}
                     </View>
-                    <View style={styles.pollInfo}>
-                      <Text style={styles.pollTitle}>{poll.question}</Text>
-                      <Text style={styles.meta}>
-                        {entryCount} ngày{poll.anonymous ? ' · Ẩn danh' : ''}
-                      </Text>
+                    <View style={styles.modalItemInfo}>
+                      <Text style={styles.modalItemTitle}>{poll.question}</Text>
+                      <Text style={styles.modalItemMeta}>{entryCount} ngày</Text>
                     </View>
                   </Pressable>
                 );
               })}
+            </ScrollView>
+            <View style={styles.modalFooter}>
+              <Pressable style={styles.modalCancelBtn} onPress={() => setShowPollSelector(false)}>
+                <Text style={styles.modalCancelText}>Đóng</Text>
+              </Pressable>
+              <Pressable
+                style={styles.modalConfirmBtn}
+                onPress={() => {
+                  setShowPollSelector(false);
+                  if (selectedPollIds.size > 0) setShowDatePicker(true);
+                }}
+              >
+                <Text style={styles.modalConfirmText}>
+                  Tiếp tục ({selectedPollIds.size})
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
-              {selectedPollIds.size > 0 && (
-                <Pressable
-                  style={styles.nextBtn}
-                  onPress={() => setTab('dates')}
-                >
-                  <Text style={styles.nextBtnText}>
-                    Xem ngày ({selectedPollIds.size} phiếu) →
-                  </Text>
+      {/* Date Picker Modal */}
+      <Modal visible={showDatePicker} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Chọn ngày áp dụng</Text>
+              <Pressable onPress={() => setShowDatePicker(false)}>
+                <Text style={styles.modalClose}>✕</Text>
+              </Pressable>
+            </View>
+            <ScrollView style={styles.modalScroll}>
+              <View style={styles.datePickerActions}>
+                <Pressable onPress={handleSelectAll}>
+                  <Text style={styles.linkText}>Tất cả (tương lai)</Text>
                 </Pressable>
-              )}
-            </>
-          )}
-        </Card>
-      )}
-
-      {/* Tab: Ngày đánh */}
-      {tab === 'dates' && (
-        <Card>
-          <SectionTitle>Chọn ngày</SectionTitle>
-          <Text style={styles.hint}>
-            Chọn ngày muốn thêm vào lịch. Chưa chọn phiếu?{' '}
-            <Text style={styles.link} onPress={() => setTab('polls')}>Quay lại tab Phiếu</Text>
-          </Text>
-
-          {selectedPollIds.size === 0 ? (
-            <Text style={styles.empty}>Chưa chọn phiếu nào.{'\n'}Bấm tab Phiếu để chọn.</Text>
-          ) : dates.length === 0 ? (
-            <Text style={styles.empty}>Không có ngày nào trong các phiếu đã chọn.</Text>
-          ) : (
-            <>
-              <View style={styles.dateActions}>
-                <Pressable onPress={() => toggleAllDates(true)}>
-                  <Text style={styles.link}>Chọn tất cả (tương lai)</Text>
-                </Pressable>
-                <Text style={styles.separator}> · </Text>
-                <Pressable onPress={() => toggleAllDates(false)}>
-                  <Text style={styles.link}>Tất cả</Text>
-                </Pressable>
-                <Text style={styles.separator}> · </Text>
-                <Pressable onPress={clearDates}>
-                  <Text style={styles.link}>Bỏ chọn</Text>
+                <Text style={styles.separator}>·</Text>
+                <Pressable onPress={handleClearAll}>
+                  <Text style={styles.linkText}>Bỏ chọn</Text>
                 </Pressable>
               </View>
-
               {dates.map((item) => {
-                const isSelected = selectedDates.some((d) => d.date === item.date);
+                const isSelected = selectedDates.some(d => d.date === item.date);
                 const isPast = item.date < todayStr;
                 return (
                   <Pressable
                     key={item.date}
-                    style={[styles.dateRow, isSelected && styles.dateRowSelected, isPast && styles.dateRowPast]}
-                    onPress={() => !isPast && toggleDate(item.date)}
-                    disabled={isPast}
+                    style={[styles.dateItem, isSelected && styles.dateItemSelected, isPast && styles.dateItemPast]}
+                    onPress={() => handleToggleDate(item.date, item.title)}
                   >
-                    <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
-                      {isSelected ? <Text style={styles.checkmark}>✓</Text> : null}
+                    <View style={[styles.checkbox, isSelected && styles.checkboxActive]}>
+                      {isSelected && <Text style={styles.checkmark}>✓</Text>}
                     </View>
-                    <View style={styles.dateInfo}>
-                      <Text style={[styles.dateText, isPast && styles.dateTextPast]}>
+                    <View style={styles.dateItemInfo}>
+                      <Text style={[styles.dateItemText, isPast && styles.dateItemTextPast]}>
                         {formatDateVi(item.date)}
                       </Text>
-                      <Text style={styles.meta}>
-                        {item.people.length} người trong phiếu
-                        {isPast ? ' · Đã qua' : ''}
-                      </Text>
+                      <Text style={styles.dateItemMeta}>{item.title}</Text>
                     </View>
                   </Pressable>
                 );
               })}
-
-              <Text style={styles.selectedCount}>
-                Đã chọn: {selectedDates.length} / {futureDates.length} ngày tương lai
-              </Text>
-            </>
-          )}
-        </Card>
-      )}
-
-      {/* Tab: Thành viên */}
-      {tab === 'members' && (
-        <Card>
-          <SectionTitle>Gắn người Zalo với thành viên</SectionTitle>
-          <Text style={styles.hint}>
-            Bấm một người Zalo, rồi bấm thành viên để gắn. Người đã gắn sẽ được thêm vào lịch khi áp dụng.
-          </Text>
-
-          {pickedPersonId ? (
-            <View style={styles.pickedInfo}>
-              <Text style={styles.pickedLabel}>
-                Đang gắn: <Text style={styles.pickedName}>
-                  {pollPeople().find((p) => p.id === pickedPersonId)?.name}
+            </ScrollView>
+            <View style={styles.modalFooter}>
+              <Pressable style={styles.modalCancelBtn} onPress={() => setShowDatePicker(false)}>
+                <Text style={styles.modalCancelText}>Hủy</Text>
+              </Pressable>
+              <Pressable style={styles.modalConfirmBtn} onPress={handleApplyToMonth}>
+                <Text style={styles.modalConfirmText}>
+                  Áp dụng ({selectedDates.length})
                 </Text>
-              </Text>
-              <Pressable onPress={() => setPickedPersonId(null)}>
-                <Text style={styles.cancelLink}>Hủy</Text>
               </Pressable>
             </View>
-          ) : null}
+          </View>
+        </View>
+      </Modal>
 
-          {pollPeople().length === 0 ? (
-            <Text style={styles.empty}>Chưa có người trong phiếu.</Text>
-          ) : (
-            pollPeople().map((person) => {
-              const member = linkedMember(person.id);
-              const isPicked = pickedPersonId === person.id;
-
-              return (
-                <View key={person.id}>
-                  <Pressable
-                    style={[styles.personRow, isPicked && styles.personRowPicked]}
-                    onPress={() => setPickedPersonId(isPicked ? null : person.id)}
-                  >
-                    {person.avatar ? (
-                      <Image source={{ uri: person.avatar.replace(/&amp;/g, '&') }} style={styles.avatar} />
-                    ) : (
-                      <View style={[styles.avatar, styles.avatarEmpty]} />
-                    )}
-                    <View style={styles.personInfo}>
-                      <Text style={styles.personName}>{person.name}</Text>
-                      <Text style={styles.meta}>
-                        {member ? `→ ${member.name}` : 'Chưa gắn'}
-                      </Text>
-                    </View>
-                    {member && (
-                      <Pressable
-                        onPress={() => store.unlinkZaloContact(person.id)}
-                        style={styles.unlinkBtn}
-                      >
-                        <Text style={styles.unlinkText}>Gỡ</Text>
-                      </Pressable>
-                    )}
-                  </Pressable>
-
-                  {isPicked && (
-                    <View style={styles.memberList}>
-                      {members.length === 0 ? (
-                        <Text style={styles.hint}>Chưa có thành viên. Thêm ở tab Thành viên.</Text>
-                      ) : (
-                        members.map((m) => (
-                          <Pressable
-                            key={m.id}
-                            style={styles.memberChoice}
-                            onPress={() => handleLinkToMember(person, m.id)}
-                          >
-                            <Text style={styles.memberChoiceText}>{m.name}</Text>
-                            {m.id === member?.id && (
-                              <Text style={styles.linkedLabel}> (đã gắn)</Text>
-                            )}
-                          </Pressable>
-                        ))
-                      )}
-                      <Pressable
-                        style={styles.memberChoice}
-                        onPress={() => handleCreateMember(person)}
-                      >
-                        <Text style={styles.createText}>+ Tạo thành viên mới</Text>
-                      </Pressable>
-                    </View>
-                  )}
-                </View>
-              );
-            })
-          )}
-        </Card>
-      )}
-
-      {/* Tab: Áp dụng */}
-      {tab === 'apply' && (
-        <>
-          <Card>
-            <SectionTitle>Áp dụng vào tháng</SectionTitle>
-
-            <Text style={styles.label}>Chọn tháng:</Text>
-            <View style={styles.monthInput}>
-              <TextInput
-                style={styles.textInput}
-                value={applyMonthId}
-                onChangeText={setApplyMonthId}
-                placeholder="2025-10"
-                placeholderTextColor={colors.muted}
-              />
-              <Pressable
-                style={styles.monthBtn}
-                onPress={() => setApplyMonthId(thisMonthId())}
-              >
-                <Text style={styles.monthBtnText}>Tháng này</Text>
+      {/* Group Picker Modal */}
+      <Modal visible={showGroupPicker} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Chọn nhóm cho whitelist</Text>
+              <Pressable onPress={() => setShowGroupPicker(false)}>
+                <Text style={styles.modalClose}>✕</Text>
               </Pressable>
             </View>
-
-            {selectedDates.length === 0 ? (
-              <Text style={styles.empty}>
-                Chưa chọn ngày nào. Quay lại tab "Ngày đánh" để chọn.
-              </Text>
-            ) : (
-              <>
-                <Text style={styles.label}>Ngày sẽ thêm:</Text>
-                {selectedDates.map((d) => (
-                  <Text key={d.date} style={styles.datePreview}>
-                    • {formatDateVi(d.date)}
-                  </Text>
-                ))}
-
-                <Text style={styles.hint}>
-                  Mỗi ngày sẽ tạo một buổi đánh với những người đã gắn Zalo. Ngày đã có lịch sẽ được cập nhật.
-                </Text>
-
-                <PrimaryButton
-                  label={`Áp dụng ${selectedDates.length} ngày vào ${monthLabel(applyMonthId)}`}
-                  onPress={handleApplyToMonth}
-                />
-              </>
-            )}
-          </Card>
-
-          {/* Quick actions */}
-          <Card>
-            <SectionTitle>Thao tác nhanh</SectionTitle>
-            <View style={styles.quickActions}>
-              <Pressable
-                style={styles.quickBtn}
-                onPress={() => {
-                  setApplyMonthId(thisMonthId());
-                  setTab('dates');
-                }}
-              >
-                <Text style={styles.quickBtnText}>Chọn ngày</Text>
-              </Pressable>
-              <Pressable
-                style={styles.quickBtn}
-                onPress={() => setTab('members')}
-              >
-                <Text style={styles.quickBtnText}>Gắn thành viên</Text>
-              </Pressable>
-            </View>
-          </Card>
-        </>
-      )}
-
-      {/* Tab: Tạo poll */}
-      {tab === 'create' && (
-        <>
-          <Card>
-            <SectionTitle>Tạo poll mới</SectionTitle>
-            <Text style={styles.hint}>
-              Chọn tháng và các ngày đánh, sau đó tạo poll trong nhóm Zalo.
-            </Text>
-
-            {/* Month selector */}
-            <Text style={styles.label}>Tháng:</Text>
-            <View style={styles.monthPickerRow}>
-              <Pressable
-                style={styles.monthArrowBtn}
-                onPress={() => {
-                  const { year, month } = parseMonthId(createMonthId);
-                  const newMonth = month === 1 ? 12 : month - 1;
-                  const newYear = month === 1 ? year - 1 : year;
-                  setCreateMonthId(`${newYear}-${String(newMonth).padStart(2, '0')}`);
-                }}
-              >
-                <Text style={styles.monthArrowText}>◀</Text>
-              </Pressable>
-              <TextInput
-                style={styles.monthInputField}
-                value={createMonthId}
-                onChangeText={setCreateMonthId}
-                placeholder="2025-10"
-                placeholderTextColor={colors.muted}
-              />
-              <Pressable
-                style={styles.monthArrowBtn}
-                onPress={() => {
-                  const { year, month } = parseMonthId(createMonthId);
-                  const newMonth = month === 12 ? 1 : month + 1;
-                  const newYear = month === 12 ? year + 1 : year;
-                  setCreateMonthId(`${newYear}-${String(newMonth).padStart(2, '0')}`);
-                }}
-              >
-                <Text style={styles.monthArrowText}>▶</Text>
-              </Pressable>
-              <Pressable
-                style={styles.monthBtn}
-                onPress={() => setCreateMonthId(thisMonthId())}
-              >
-                <Text style={styles.monthBtnText}>Tháng này</Text>
-              </Pressable>
-            </View>
-
-            {/* Weekday selector */}
-            <Text style={styles.label}>Chọn thứ (chọn tất cả = đánh mỗi tuần):</Text>
-            <View style={styles.weekdayRow}>
-              {[
-                { label: 'T2', day: 0 },
-                { label: 'T3', day: 1 },
-                { label: 'T4', day: 2 },
-                { label: 'T5', day: 3 },
-                { label: 'T6', day: 4 },
-                { label: 'T7', day: 5 },
-                { label: 'CN', day: 6 },
-              ].map(({ label, day }) => (
-                <Pressable
-                  key={day}
-                  style={[styles.weekdayBtn, createWeekdays.includes(day) && styles.weekdayBtnActive]}
-                  onPress={() => toggleCreateWeekday(day)}
-                >
-                  <Text style={[styles.weekdayBtnText, createWeekdays.includes(day) && styles.weekdayBtnTextActive]}>
-                    {label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            {/* Weekday header row for dates */}
-            <View style={styles.weekdayRow}>
-              {['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map((label) => (
-                <View key={label} style={styles.weekdayHeader}>
-                  <Text style={styles.weekdayHeaderText}>{label}</Text>
-                </View>
-              ))}
-            </View>
-
-            {/* Dates grid - aligned with weekday headers */}
-            {(() => {
-              const { year, month } = parseMonthId(createMonthId);
-              const total = daysInMonth(year, month);
-              const firstDate = `${createMonthId}-01`;
-              const firstWeekday = weekdayMon0FromDateId(firstDate);
-              const allDates: (string | null)[] = [];
-              // Add empty cells for days before the 1st
-              for (let i = 0; i < firstWeekday; i++) {
-                allDates.push(null);
-              }
-              // Add all days
-              for (let day = 1; day <= total; day++) {
-                allDates.push(`${createMonthId}-${String(day).padStart(2, '0')}`);
-              }
-              return (
-                <View style={styles.datesGrid}>
-                  {allDates.map((dateId, index) => {
-                    if (!dateId) {
-                      return <View key={`empty-${index}`} style={styles.dateCell} />;
-                    }
-                    const isFromWeekday = createWeekdays.includes(weekdayMon0FromDateId(dateId));
-                    const isSelected = createSelectedDates.includes(dateId);
-                    return (
-                      <Pressable
-                        key={dateId}
-                        style={[
-                          styles.dateCell,
-                          isFromWeekday && styles.dateCellWeekday,
-                          isSelected && styles.dateCellSelected,
-                        ]}
-                        onPress={() => toggleCreateDate(dateId)}
-                      >
-                        <Text style={[
-                          styles.dateCellText,
-                          isFromWeekday && styles.dateCellTextWeekday,
-                          isSelected && styles.dateCellTextSelected,
-                        ]}>
-                          {dateId.split('-')[2]}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              );
-            })()}
-            <View style={styles.dateActions}>
-              <Pressable onPress={selectAllCreateWeekdays}>
-                <Text style={styles.link}>Chọn tất cả</Text>
-              </Pressable>
-              <Text style={styles.separator}> · </Text>
-              <Pressable onPress={clearCreateWeekdays}>
-                <Text style={styles.link}>Bỏ chọn</Text>
-              </Pressable>
-            </View>
-
-            {/* Summary */}
-            <View style={styles.pollSummary}>
-              <Text style={styles.pollSummaryText}>
-                {allCreateSelectedDates().length} ngày được chọn
-              </Text>
-              {allCreateSelectedDates().slice(0, 5).map((date) => (
-                <Text key={date} style={styles.pollSummaryItem}>
-                  • {formatDateForPoll(date)}
-                </Text>
-              ))}
-              {allCreateSelectedDates().length > 5 && (
-                <Text style={styles.pollSummaryMore}>
-                  ... và {allCreateSelectedDates().length - 5} ngày khác
-                </Text>
-              )}
-            </View>
-
-            {/* Create button */}
-            {createLoading ? (
-              <View style={styles.busy}>
-                <Text style={styles.busyText}>Đang tạo poll...</Text>
-              </View>
-            ) : (
-              <PrimaryButton
-                label={`Tạo poll với ${allCreateSelectedDates().length} ngày`}
-                onPress={handleCreatePoll}
-                disabled={allCreateSelectedDates().length < 2}
-              />
-            )}
-          </Card>
-
-          {/* Group selector */}
-          <Card>
-            <SectionTitle>Nhóm Zalo</SectionTitle>
-            <Pressable style={styles.groupSelector} onPress={() => void loadGroups()}>
-              <Text style={styles.groupSelectorText}>
-                {groups.find((g) => g.id === selectedGroupId)?.name || 'Chọn nhóm...'}
-              </Text>
-              <Text style={styles.groupSelectorIcon}>▼</Text>
-            </Pressable>
-          </Card>
-
-          {/* Group picker modal */}
-          <Modal visible={showGroupPicker} transparent animationType="slide">
-            <View style={styles.modalOverlay}>
-              <View style={styles.modalContent}>
-                <Text style={styles.modalTitle}>Chọn nhóm Zalo</Text>
-                <ScrollView style={styles.groupList}>
-                  {groups.map((group) => (
+            <ScrollView style={styles.modalScroll}>
+              {groups.length === 0 ? (
+                <Text style={styles.emptyText}>Không có nhóm nào</Text>
+              ) : (
+                groups.map((group) => {
+                  const isSelected = whitelistSelectedGroups.has(group.id);
+                  return (
                     <Pressable
                       key={group.id}
-                      style={[styles.groupItem, group.id === selectedGroupId && styles.groupItemSelected]}
+                      style={[styles.modalItem, isSelected && styles.modalItemSelected]}
                       onPress={() => {
-                        setSelectedGroupId(group.id);
-                        setShowGroupPicker(false);
+                        setWhitelistSelectedGroups(prev => {
+                          const next = new Set(prev);
+                          if (next.has(group.id)) next.delete(group.id);
+                          else next.add(group.id);
+                          return next;
+                        });
                       }}
                     >
-                      <Text style={styles.groupItemName}>{group.name}</Text>
-                      <Text style={styles.groupItemMembers}>{group.totalMember} thành viên</Text>
+                      <View style={[styles.checkbox, isSelected && styles.checkboxActive]}>
+                        {isSelected && <Text style={styles.checkmark}>✓</Text>}
+                      </View>
+                      <View style={styles.modalItemInfo}>
+                        <Text style={styles.modalItemTitle}>{group.name}</Text>
+                        <Text style={styles.modalItemMeta}>{group.totalMember} thành viên</Text>
+                      </View>
                     </Pressable>
-                  ))}
-                </ScrollView>
-                <PrimaryButton label="Đóng" onPress={() => setShowGroupPicker(false)} />
-              </View>
+                  );
+                })
+              )}
+            </ScrollView>
+            <View style={styles.modalFooter}>
+              <Pressable style={styles.modalCancelBtn} onPress={() => setShowGroupPicker(false)}>
+                <Text style={styles.modalCancelText}>Hủy</Text>
+              </Pressable>
+              <Pressable
+                style={styles.modalConfirmBtn}
+                onPress={async () => {
+                  setShowGroupPicker(false);
+                  const config = await loadZaloConfig();
+                  if (!config) return;
+                  // Add each selected group that's not already in whitelist
+                  for (const groupId of whitelistSelectedGroups) {
+                    const group = groups.find(g => g.id === groupId);
+                    if (group && !whitelistStatus?.groups?.includes(groupId)) {
+                      await addGroupToWhitelist(config, groupId, group.name);
+                    }
+                  }
+                  // Remove groups that were unchecked
+                  if (whitelistStatus?.groups) {
+                    for (const groupId of whitelistStatus.groups) {
+                      if (!whitelistSelectedGroups.has(groupId)) {
+                        await removeGroupFromWhitelist(config, groupId);
+                      }
+                    }
+                  }
+                  await loadWhitelist();
+                  Alert.alert('Thành công', 'Đã cập nhật whitelist');
+                }}
+              >
+                <Text style={styles.modalConfirmText}>
+                  Lưu ({whitelistSelectedGroups.size})
+                </Text>
+              </Pressable>
             </View>
-          </Modal>
-        </>
-      )}
-    </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.bg,
+  },
+  header: {
+    paddingHorizontal: 20,
+    backgroundColor: colors.bg,
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  headerSubtitle: {
+    fontSize: 14,
+    color: colors.muted,
+    marginTop: 2,
+  },
   content: {
-    padding: space.md,
-    paddingBottom: 40,
+    flex: 1,
+  },
+  contentContainer: {
+    paddingHorizontal: 16,
+    paddingBottom: 120,
     gap: 12,
   },
-  title: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  hint: {
-    color: colors.muted,
-    fontSize: 14,
-    lineHeight: 20,
-    marginBottom: 10,
-  },
-  empty: {
-    color: colors.muted,
-    fontSize: 15,
-    lineHeight: 22,
-    textAlign: 'center',
-    paddingVertical: 20,
-  },
-  label: {
-    fontSize: 14,
+  cardTitle: {
+    fontSize: 18,
     fontWeight: '600',
     color: colors.text,
-    marginBottom: 6,
-    marginTop: 8,
+    marginBottom: 4,
   },
-  meta: {
+  cardSubtitle: {
+    fontSize: 14,
     color: colors.muted,
-    fontSize: 13,
+    marginBottom: 16,
   },
 
-  // Tab bar
-  tabBar: {
-    flexDirection: 'row',
-    backgroundColor: colors.bg,
-    borderRadius: radius.md,
-    padding: 4,
+  // Quick Actions
+  quickCard: {
+    padding: 16,
   },
-  tab: {
+  quickActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+  },
+  quickAction: {
     flex: 1,
-    paddingVertical: 10,
+    backgroundColor: colors.card,
+    padding: 16,
+    borderRadius: radius.md,
     alignItems: 'center',
-    borderRadius: radius.sm,
-    flexDirection: 'row',
-    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.line,
   },
-  tabActive: {
-    backgroundColor: colors.primary,
+  quickActionIcon: {
+    fontSize: 28,
+    marginBottom: 8,
   },
-  tabText: {
+  quickActionLabel: {
     fontSize: 14,
-    fontWeight: '600',
-    color: colors.muted,
-  },
-  tabTextActive: {
-    color: '#fff',
-  },
-  badge: {
-    backgroundColor: colors.danger,
-    borderRadius: 10,
-    minWidth: 20,
-    height: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 4,
-  },
-  badgeText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
+    color: colors.text,
+    fontWeight: '500',
   },
 
-  // Date selection
-  dateActions: {
+  // Selection Cards
+  selectionCard: {
+    padding: 16,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  selectionHeader: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  selectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  clearText: {
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: '500',
+  },
+  selectionMeta: {
+    fontSize: 14,
+    color: colors.muted,
     marginBottom: 12,
   },
-
-  // Poll selection
-  pollRow: {
+  datePreview: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.line,
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
   },
-  pollRowSelected: {
-    backgroundColor: colors.primarySoft,
-    marginHorizontal: -8,
-    paddingHorizontal: 8,
-    borderRadius: radius.sm,
+  dateChip: {
+    backgroundColor: colors.card,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
   },
-  pollInfo: {
-    flex: 1,
-  },
-  pollTitle: {
-    fontSize: 15,
-    fontWeight: '600',
+  dateChipText: {
+    fontSize: 13,
     color: colors.text,
   },
-  nextBtn: {
-    marginTop: 16,
+  actionBtn: {
     backgroundColor: colors.primary,
     paddingVertical: 12,
-    borderRadius: radius.sm,
+    borderRadius: radius.md,
     alignItems: 'center',
   },
-  nextBtnText: {
+  actionBtnText: {
     color: '#fff',
     fontSize: 15,
-    fontWeight: '700',
-  },
-  separator: {
-    color: colors.muted,
-  },
-  link: {
-    color: colors.primary,
-    fontSize: 14,
     fontWeight: '600',
   },
-  dateRow: {
+  applyBtn: {
+    backgroundColor: colors.primary,
+    paddingVertical: 14,
+    borderRadius: radius.md,
+    alignItems: 'center',
+  },
+  applyBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+
+  // Poll Items
+  pollItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.line,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
   },
-  dateRowSelected: {
-    backgroundColor: colors.primarySoft,
-    marginHorizontal: -8,
-    paddingHorizontal: 8,
-    borderRadius: radius.sm,
-  },
-  dateRowPast: {
-    opacity: 0.5,
-  },
-  checkbox: {
+  pollCheckbox: {
     width: 24,
     height: 24,
     borderRadius: 12,
     borderWidth: 2,
-    borderColor: colors.primary,
+    borderColor: colors.line,
+    marginRight: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
   },
-  checkboxChecked: {
+  pollCheckboxActive: {
     backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
-  checkmark: {
+  pollCheckmark: {
     color: '#fff',
-    fontWeight: '700',
     fontSize: 14,
+    fontWeight: '600',
   },
-  dateInfo: {
+  pollInfo: {
     flex: 1,
   },
-  dateText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  dateTextPast: {
-    color: colors.muted,
-  },
-  selectedCount: {
-    marginTop: 12,
-    textAlign: 'center',
-    color: colors.primary,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-
-  // Person / Member
-  personRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.line,
-  },
-  personRowPicked: {
-    backgroundColor: colors.primarySoft,
-    marginHorizontal: -8,
-    paddingHorizontal: 8,
-    borderRadius: radius.sm,
-  },
-  avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    marginRight: 10,
-  },
-  avatarEmpty: {
-    backgroundColor: colors.line,
-  },
-  personInfo: {
-    flex: 1,
-  },
-  personName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  unlinkBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  unlinkText: {
-    color: colors.danger,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  pickedInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.primarySoft,
-    padding: 10,
-    borderRadius: radius.sm,
-    marginBottom: 10,
-  },
-  pickedLabel: {
-    fontSize: 14,
-  },
-  pickedName: {
-    fontWeight: '700',
-    color: colors.primary,
-  },
-  cancelLink: {
-    color: colors.muted,
-    fontSize: 14,
-  },
-  memberList: {
-    marginLeft: 50,
-    paddingBottom: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.line,
-  },
-  memberChoice: {
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.line,
-  },
-  memberChoiceText: {
+  pollName: {
     fontSize: 15,
     color: colors.text,
+    fontWeight: '500',
   },
-  linkedLabel: {
-    color: colors.primary,
+  pollMeta: {
     fontSize: 13,
+    color: colors.muted,
+    marginTop: 2,
   },
-  createText: {
+  viewMore: {
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  viewMoreText: {
+    fontSize: 14,
     color: colors.primary,
-    fontSize: 15,
-    fontWeight: '600',
+    fontWeight: '500',
+  },
+  emptyText: {
+    fontSize: 14,
+    color: colors.muted,
+    textAlign: 'center',
+    paddingVertical: 20,
   },
 
-  // Apply tab
-  monthInput: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  // Create Tab
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
+    marginTop: 16,
+    marginBottom: 8,
   },
   textInput: {
-    flex: 1,
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.sm,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderRadius: radius.md,
+    padding: 14,
+    fontSize: 15,
+    color: colors.text,
+    backgroundColor: colors.card,
+  },
+  selector: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: radius.md,
+    padding: 14,
+    backgroundColor: colors.card,
+  },
+  selectorText: {
     fontSize: 15,
     color: colors.text,
   },
-  monthBtn: {
+  selectorArrow: {
+    fontSize: 12,
+    color: colors.muted,
+  },
+  dateSelectorBtn: {
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: radius.md,
+    borderStyle: 'dashed',
+  },
+  dateSelectorText: {
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: '500',
+  },
+  selectedDates: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+  },
+  selectedDateChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: colors.primarySoft,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    gap: 4,
   },
-  monthBtnText: {
+  selectedDateText: {
+    fontSize: 13,
     color: colors.primary,
-    fontSize: 14,
-    fontWeight: '600',
   },
-  datePreview: {
-    fontSize: 14,
-    color: colors.text,
-    marginLeft: 8,
-    marginVertical: 2,
-  },
-
-  // Quick actions
-  quickActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  quickBtn: {
-    flex: 1,
-    backgroundColor: colors.bg,
-    paddingVertical: 12,
-    borderRadius: radius.sm,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.line,
-  },
-  quickBtnText: {
-    color: colors.primary,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-
-  // Create poll tab
-  monthPickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 16,
-  },
-  monthArrowBtn: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.card,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.line,
-  },
-  monthArrowText: {
+  removeDateText: {
     fontSize: 16,
     color: colors.primary,
-  },
-  monthInputField: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: colors.line,
-    borderRadius: radius.sm,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
     fontWeight: '600',
-    color: colors.text,
-    textAlign: 'center',
   },
-  weekdayRow: {
+  weekdayGrid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    gap: 8,
   },
   weekdayBtn: {
     flex: 1,
-    paddingVertical: 8,
+    paddingVertical: 12,
+    borderRadius: radius.md,
     alignItems: 'center',
+    backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.sm,
-    marginHorizontal: 2,
   },
   weekdayBtnActive: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
-  weekdayBtnText: {
-    fontSize: 13,
+  weekdayText: {
+    fontSize: 14,
     fontWeight: '600',
     color: colors.muted,
   },
-  weekdayBtnTextActive: {
+  weekdayTextActive: {
     color: '#fff',
   },
-  weekdayHeader: {
-    flex: 1,
+  createBtn: {
+    backgroundColor: colors.primary,
+    paddingVertical: 16,
+    borderRadius: radius.md,
     alignItems: 'center',
-    paddingVertical: 4,
+    marginTop: 24,
   },
-  weekdayHeaderText: {
-    fontSize: 11,
+  createBtnDisabled: {
+    opacity: 0.6,
+  },
+  createBtnText: {
+    color: '#fff',
+    fontSize: 16,
     fontWeight: '600',
-    color: colors.muted,
   },
-  datesGrid: {
+
+  // Members Tab
+  memberGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginBottom: 12,
+    gap: 16,
+    marginTop: 12,
   },
-  dateCell: {
-    width: '14.28%',
-    aspectRatio: 1,
+  memberItem: {
+    alignItems: 'center',
+    width: 70,
+  },
+  memberAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.line,
-    marginBottom: -1,
-    marginRight: -1,
+    overflow: 'hidden',
   },
-  dateCellWeekday: {
-    backgroundColor: colors.bg,
+  memberAvatarImg: {
+    width: '100%',
+    height: '100%',
   },
-  dateCellSelected: {
-    backgroundColor: colors.primarySoft,
-    borderColor: colors.primary,
-  },
-  dateCellText: {
-    fontSize: 14,
-    color: colors.text,
-  },
-  dateCellTextWeekday: {
+  memberAvatarText: {
+    fontSize: 22,
     fontWeight: '600',
-  },
-  dateCellTextSelected: {
     color: colors.primary,
-    fontWeight: '700',
   },
-  pollSummary: {
-    backgroundColor: colors.card,
-    padding: 12,
-    borderRadius: radius.sm,
-    marginVertical: 12,
+  memberName: {
+    fontSize: 12,
+    color: colors.text,
+    marginTop: 6,
+    textAlign: 'center',
   },
-  pollSummaryText: {
+  moreText: {
     fontSize: 14,
+    color: colors.muted,
+    textAlign: 'center',
+    marginTop: 12,
+  },
+
+  // Settings Tab
+  settingSection: {
+    marginBottom: 16,
+  },
+  settingLabel: {
+    fontSize: 15,
     fontWeight: '600',
     color: colors.text,
-    marginBottom: 6,
+    marginBottom: 4,
   },
-  pollSummaryItem: {
+  settingHint: {
     fontSize: 13,
     color: colors.muted,
-    marginLeft: 8,
+    marginBottom: 12,
   },
-  pollSummaryMore: {
-    fontSize: 12,
-    color: colors.muted,
-    fontStyle: 'italic',
-    marginTop: 4,
-    marginLeft: 8,
-  },
-  busy: {
-    minHeight: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  busyText: {
-    color: colors.muted,
-    fontSize: 14,
-  },
-  groupSelector: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 12,
+  statusBox: {
     backgroundColor: colors.card,
-    borderRadius: radius.sm,
+    padding: 14,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.line,
   },
-  groupSelectorText: {
+  statusText: {
     fontSize: 15,
     color: colors.text,
+    fontWeight: '500',
   },
-  groupSelectorIcon: {
-    fontSize: 12,
+  whitelistList: {
+    marginTop: 12,
+  },
+  whitelistItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
+  whitelistId: {
+    fontSize: 13,
+    color: colors.muted,
+    fontFamily: 'monospace',
+  },
+  removeBtn: {
+    backgroundColor: colors.dangerSoft,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radius.sm,
+  },
+  removeBtnText: {
+    color: colors.danger,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  settingActions: {
+    gap: 12,
+    marginTop: 16,
+  },
+  settingBtn: {
+    backgroundColor: colors.primary,
+    paddingVertical: 14,
+    borderRadius: radius.md,
+    alignItems: 'center',
+  },
+  settingBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  clearBtn: {
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  clearBtnText: {
+    color: colors.danger,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
+  infoLabel: {
+    fontSize: 14,
     color: colors.muted,
   },
+  infoValue: {
+    fontSize: 14,
+    color: colors.text,
+    fontWeight: '500',
+  },
+
+  // Bottom Navigation
+  bottomNav: {
+    flexDirection: 'row',
+    backgroundColor: colors.card,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+    paddingTop: 8,
+  },
+  navItem: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  navItemActive: {
+    // Active state
+  },
+  navIcon: {
+    fontSize: 24,
+    marginBottom: 4,
+  },
+  navLabel: {
+    fontSize: 11,
+    color: colors.muted,
+  },
+  navLabelActive: {
+    color: colors.primary,
+    fontWeight: '600',
+  },
+
+  // Modal Styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -1442,34 +1246,151 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     backgroundColor: colors.bg,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '80%',
+    paddingBottom: 34,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     padding: 20,
-    maxHeight: '70%',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
   },
   modalTitle: {
     fontSize: 18,
     fontWeight: '700',
     color: colors.text,
-    marginBottom: 16,
   },
-  groupList: {
-    maxHeight: 300,
+  modalClose: {
+    fontSize: 20,
+    color: colors.muted,
+    padding: 4,
   },
-  groupItem: {
-    padding: 12,
+  modalScroll: {
+    padding: 16,
+  },
+  modalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.line,
   },
-  groupItemSelected: {
+  modalItemSelected: {
     backgroundColor: colors.primarySoft,
+    marginHorizontal: -16,
+    paddingHorizontal: 16,
   },
-  groupItemName: {
+  modalItemInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  modalItemTitle: {
+    fontSize: 15,
+    color: colors.text,
+    fontWeight: '500',
+  },
+  modalItemMeta: {
+    fontSize: 13,
+    color: colors.muted,
+    marginTop: 2,
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    padding: 16,
+    gap: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.line,
+  },
+  modalCancelBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    alignItems: 'center',
+    backgroundColor: colors.line,
+    borderRadius: radius.md,
+  },
+  modalCancelText: {
     fontSize: 15,
     fontWeight: '600',
     color: colors.text,
   },
-  groupItemMembers: {
+  modalConfirmBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+  },
+  modalConfirmText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  checkmark: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  datePickerActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
+  linkText: {
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: '500',
+  },
+  separator: {
+    color: colors.muted,
+  },
+  dateItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
+  dateItemSelected: {
+    backgroundColor: colors.primarySoft,
+    marginHorizontal: -16,
+    paddingHorizontal: 16,
+  },
+  dateItemPast: {
+    opacity: 0.5,
+  },
+  dateItemInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  dateItemText: {
+    fontSize: 15,
+    color: colors.text,
+    fontWeight: '500',
+  },
+  dateItemTextPast: {
+    color: colors.muted,
+  },
+  dateItemMeta: {
     fontSize: 13,
     color: colors.muted,
     marginTop: 2,

@@ -137,6 +137,7 @@ export function ZaloBar() {
 const styles = StyleSheet.create({
   wrap: {
     gap: 8,
+    padding: 16
   },
   status: {
     color: colors.muted,
