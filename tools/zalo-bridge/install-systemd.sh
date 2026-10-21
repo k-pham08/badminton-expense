@@ -21,6 +21,9 @@ NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
 log "Cài dependencies trong $DIR"
 (cd "$DIR" && npm install --omit=dev)
 
+log "Thêm log chẩn đoán cho zalo-api-final"
+(cd "$DIR" && node patch-zalo-diag.mjs || true)
+
 log "Tạo thư mục state ~/.culong cho $RUN_USER"
 install -d -m 700 -o "$RUN_USER" -g "$RUN_USER" "/home/${RUN_USER}/.culong"
 touch "$LOG"
