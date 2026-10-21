@@ -10,7 +10,10 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.khoapham.badminton-expense",
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "App reads member list and vote sheets from Mac on the same Wi-Fi."
+        "NSLocalNetworkUsageDescription": "App reads member list and vote sheets from the Zalo bridge running on your Mac or VPS.",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
       }
     },
     "android": {

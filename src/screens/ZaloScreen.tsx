@@ -26,6 +26,7 @@ function thisMonthId(): string {
 import type { ZaloBridgePerson, ZaloPoll } from '../utils/zaloBridge';
 import type { Member, ZaloContact } from '../types';
 import type { ZaloPerson } from '../utils/vote';
+import { matchVoteNames } from '../utils/vote';
 import { entriesForPoll, loadZalo, peopleForPoll, useZaloSyncState } from '../utils/zaloSync';
 
 type Tab = 'home' | 'create' | 'members' | 'settings';
@@ -33,7 +34,10 @@ type Tab = 'home' | 'create' | 'members' | 'settings';
 interface SelectedDate {
   date: string;
   title: string;
+  /** Tên người vote trên Zalo cho ngày này. */
   people: string[];
+  /** Zalo voter id cùng thứ tự với people. */
+  voterIds: string[];
 }
 
 export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
@@ -78,14 +82,20 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
             date: e.date,
             title: p.question,
             people: e.names,
+            voterIds: e.voterIds,
           }))
         )
         .sort((a, b) => a.date.localeCompare(b.date))
     : [];
 
   const handleSelectAll = () => {
-    const future = dates.filter(d => d.date >= todayStr).map(d => d.date);
-    setSelectedDates(future.map(d => ({ date: d, title: '', people: [] })));
+    const future = dates.filter(d => d.date >= todayStr);
+    setSelectedDates(future.map(d => ({
+      date: d.date,
+      title: d.title,
+      people: d.people,
+      voterIds: d.voterIds,
+    })));
   };
 
   const handleClearAll = () => setSelectedDates([]);
@@ -94,7 +104,13 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
     setSelectedDates(prev => {
       const exists = prev.find(d => d.date === date);
       if (exists) return prev.filter(d => d.date !== date);
-      return [...prev, { date, title, people: [] }];
+      const found = dates.find(d => d.date === date);
+      return [...prev, {
+        date,
+        title,
+        people: found?.people ?? [],
+        voterIds: found?.voterIds ?? [],
+      }];
     });
   };
 
@@ -108,19 +124,52 @@ export function ZaloScreen({ monthId: currentMonthId }: { monthId: string }) {
       Alert.alert('Lỗi', 'Chưa kết nối Zalo');
       return;
     }
+    const members = store.data.members;
+    const contacts = store.data.zaloContacts ?? [];
+    const entries: { date: string; attendeeIds: string[]; voters: number; matched: number }[] = [];
+    const skippedNoMatch: string[] = [];
+    const unmatchedNames = new Set<string>();
+    for (const item of selectedDates) {
+      const { matched, unknown } = matchVoteNames(item.people, members, item.voterIds, contacts);
+      // Bỏ qua ngày không khớp được thành viên nào (vote rỗng hoặc tên chưa liên kết)
+      if (matched.length === 0) {
+        skippedNoMatch.push(item.date);
+        continue;
+      }
+      entries.push({
+        date: item.date,
+        attendeeIds: matched.map((member) => member.id),
+        voters: item.people.length,
+        matched: matched.length,
+      });
+      for (const name of unknown) unmatchedNames.add(name);
+    }
+    const totalVoters = entries.reduce((sum, e) => sum + e.voters, 0);
+    const totalMatched = entries.reduce((sum, e) => sum + e.matched, 0);
+    const summary =
+      `${entries.length} ngày · khớp ${totalMatched}/${totalVoters} vote` +
+      (unmatchedNames.size > 0 ? ` · ${unmatchedNames.size} tên chưa liên kết` : '') +
+      (skippedNoMatch.length > 0 ? ` · ${skippedNoMatch.length} ngày không khớp ai` : '');
     Alert.alert(
       'Áp dụng',
-      `Thêm ${selectedDates.length} ngày vào lịch tháng này?`,
+      `${summary}\n\nÁp dụng sẽ thay người đánh của các ngày này bằng người đã vote.`,
       [
         { text: 'Hủy', style: 'cancel' },
         {
           text: 'Áp dụng',
           onPress: () => {
-            // Apply dates to store
-            for (const { date } of selectedDates) {
-              store.addPlayingDate(currentMonthId, date);
-            }
-            Alert.alert('Thành công', `Đã thêm ${selectedDates.length} ngày`);
+            // applyMonthVote vừa thêm ngày (extraDates) vừa set attendees thay thế danh sách vote
+            const applied = store.applyMonthVote(currentMonthId, entries);
+            const tail = applied < entries.length
+              ? ` (một số ngày nằm ngoài tháng ${currentMonthId})`
+              : '';
+            const tail2 = skippedNoMatch.length > 0
+              ? ` · bỏ qua ${skippedNoMatch.length} ngày chưa khớp ai`
+              : '';
+            Alert.alert(
+              'Thành công',
+              `Đã thay ${applied} ngày bằng thành viên từ phiếu vote${tail}${tail2}.`
+            );
             setSelectedDates([]);
             setShowDatePicker(false);
           },
